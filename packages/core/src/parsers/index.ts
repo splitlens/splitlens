@@ -6,16 +6,21 @@
  *
  * v1 parsers shipped: HDFC savings, HDFC credit card (v1.3 + v1.6 layouts).
  */
-import type { ParseResult } from "../types/index.js";
+import type { ExtractedPage, ParseResult } from "../types/index.js";
 
 export interface ParseOptions {
   password?: string;
-  /** Pluggable PDF text extractor. Allows DI in tests + per-platform implementations
-   *  (PDF.js for browser, pdf-parse for Node, etc.). */
-  extractText?: (pdf: Uint8Array, password?: string) => Promise<string[]>;
+  /**
+   * Pluggable positional PDF extractor. Returns pages with words + bounding boxes.
+   * Implementations:
+   *   - browser: pdfjs-dist getTextContent (returns positional items)
+   *   - node test: pdfplumber-equivalent or hand-crafted fixtures
+   *   - mobile (Phase 2): native PDFKit on iOS, PdfRenderer on Android
+   */
+  extractPages?: (pdf: Uint8Array, password?: string) => Promise<ExtractedPage[]>;
 }
 
 /** Stub that future parsers will conform to. */
 export type Parser = (pdf: Uint8Array, opts?: ParseOptions) => Promise<ParseResult>;
 
-export { parseHdfcSavings } from "./hdfc-savings.js";
+export { parseHdfcSavings, parseHdfcSavingsPages } from "./hdfc-savings.js";

@@ -5,11 +5,36 @@
 /** ISO YYYY-MM-DD */
 export type ISODate = string;
 
+/**
+ * One word extracted from a PDF, with positional info.
+ * Coordinates are in PDF points; origin is top-left (matches pdfplumber + pdfjs).
+ */
+export interface PdfWord {
+  text: string;
+  /** left edge */
+  x0: number;
+  /** right edge */
+  x1: number;
+  /** top edge (PDF y-axis: top is small, bottom is large — same as pdfplumber convention) */
+  top: number;
+  /** bottom edge */
+  bottom: number;
+}
+
+export interface ExtractedPage {
+  pageNumber: number;
+  width: number;
+  height: number;
+  words: PdfWord[];
+}
+
 export type Direction = "in" | "out";
 
 export interface RawTransaction {
   /** ISO YYYY-MM-DD */
   txnDate: ISODate;
+  /** Bank's value date (when funds settle); often same as txnDate. */
+  valueDate?: ISODate;
   /** Bank's narration / description string */
   narration: string;
   /** Withdrawal amount in INR (positive). Null if this is a deposit. */
