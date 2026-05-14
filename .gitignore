@@ -1,0 +1,41 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build artifacts
+.turbo/
+.next/
+dist/
+out/
+build/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+
+# env / secrets
+.env
+.env.local
+.env.*.local
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.swp
+
+# logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# user data — never commit financial PDFs
+*.pdf
+*.db
+*.sqlite
+data/
+statements/
+test-data-real/

@@ -1,0 +1,7 @@
+{
+  "name": "@splitlens/tsconfig",
+  "version": "0.0.1",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "files": ["base.json", "library.json", "nextjs.json"]
+}

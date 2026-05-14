@@ -1,0 +1,68 @@
+/**
+ * Shared types for SplitLens core. Framework-free, no DOM, no Node-specific imports.
+ */
+
+/** ISO YYYY-MM-DD */
+export type ISODate = string;
+
+export type Direction = "in" | "out";
+
+export interface RawTransaction {
+  /** ISO YYYY-MM-DD */
+  txnDate: ISODate;
+  /** Bank's narration / description string */
+  narration: string;
+  /** Withdrawal amount in INR (positive). Null if this is a deposit. */
+  withdrawal: number | null;
+  /** Deposit amount in INR (positive). Null if this is a withdrawal. */
+  deposit: number | null;
+  /** Closing balance after this transaction (savings only). */
+  closingBalance?: number;
+  /** Bank-provided reference number, if any. */
+  refNo?: string;
+  /** 0-based index within the source PDF, used for idempotent ingestion. */
+  sourceRowIdx: number;
+}
+
+export interface ParsedStatement {
+  bank: string;
+  accountType: "savings" | "credit_card";
+  accountLast4: string;
+  customerName?: string;
+  periodFrom?: ISODate;
+  periodTo?: ISODate;
+}
+
+export interface ParseResult {
+  statement: ParsedStatement | null;
+  transactions: RawTransaction[];
+}
+
+export interface Person {
+  /** Stable id, lowercase, e.g. "rahul" */
+  id: string;
+  displayName: string;
+  /** Regex patterns that match narration of payments to/from this person. */
+  upiPatterns: string[];
+}
+
+export interface SharedTransaction {
+  id: number;
+  amount: number;
+  /** Lowercase person ids who share this expense (excluding the payer/me). */
+  sharedWith: string[];
+  /** Total people INCLUDING me. share_count=3 → 3-way split. */
+  shareCount: number;
+  direction: Direction;
+}
+
+export interface SettlementEntry {
+  /** Total amount others owe me (sum of their shares of expenses I paid for). */
+  owesMe: number;
+  /** Repayments received from this person (matched via UPI patterns). */
+  paidBack: number;
+  /** Net = owesMe - paidBack. Positive = they owe me. Negative = I owe them. */
+  net: number;
+}
+
+export type Settlement = Record<string, SettlementEntry>;
