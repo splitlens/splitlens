@@ -52,29 +52,29 @@
 
 ## Stack — final picks
 
-| Layer | Pick | Rationale |
-|---|---|---|
-| **Framework** | Next.js 15 (App Router) | SSG for marketing pages, fast SPA for app. Static export deployable to Cloudflare Pages. |
-| **Language** | TypeScript strict | Non-negotiable for finance. Catches off-by-one rupee bugs. |
-| **Package mgr** | pnpm 9 | Disk-efficient monorepo workspaces, used by Vercel/Linear. |
-| **Runtime** | Bun (dev), Node 22 (build) | Bun = 3-5x faster dev server. |
-| **UI primitives** | shadcn/ui + Radix | Copy-paste, own the code. No vendor lock-in. |
-| **Styling** | Tailwind 4 | Pairs with shadcn. CSS vars for theming. |
-| **Animation** | Framer Motion 11 | Smooth transitions for sunburst zoom, table row appearance. |
-| **Charts** | Apache ECharts (sunburst/treemap), Recharts (simple), Visx (calendar heatmap) | ECharts has best interactive sunburst on web. Click events expose path/depth richly. |
-| **Table** | TanStack Table v8 + TanStack Virtual | True cell range selection, virtual scroll, keyboard nav. |
-| **Database** | PGlite (Postgres-WASM) → OPFS | Same SQL as the existing SQLite prototype. Persists across reloads. ~3MB gzipped. |
-| **ORM** | Drizzle ORM | Type-safe, lighter than Prisma, generates readable SQL. |
-| **Analytics queries** | DuckDB-WASM | Sub-second SQL on 100K+ rows in browser. Used for monthly aggregations. |
-| **State** | Zustand (atomic) + TanStack Query (cache) | Avoids Redux ceremony. TanStack Query for invalidation after mutations. |
-| **Forms** | React Hook Form + Zod | Type-safe validation. |
-| **PDF parsing** | PDF.js (in Web Worker) | Battle-tested. Same regexes as Python prototype. |
-| **Encryption** | Web Crypto API + Argon2 (via WASM) | AES-256-GCM with passphrase-derived key. |
-| **PWA** | next-pwa | Installable, offline-capable. |
-| **Testing** | Vitest + Playwright + Storybook | Vitest unit/integration; Playwright E2E; Storybook visual regression. |
-| **Deploy** | Cloudflare Pages | Free tier, fast global CDN, GitHub integration, no cold starts. |
-| **Analytics** | Plausible (self-hosted later, hosted now) | Privacy-first, no cookies, no PII. Aligned with brand. |
-| **Errors** | Sentry (free tier) | Crash reports without PII. Configurable scrubbing. |
+| Layer                 | Pick                                                                          | Rationale                                                                                |
+| --------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| **Framework**         | Next.js 15 (App Router)                                                       | SSG for marketing pages, fast SPA for app. Static export deployable to Cloudflare Pages. |
+| **Language**          | TypeScript strict                                                             | Non-negotiable for finance. Catches off-by-one rupee bugs.                               |
+| **Package mgr**       | pnpm 9                                                                        | Disk-efficient monorepo workspaces, used by Vercel/Linear.                               |
+| **Runtime**           | Bun (dev), Node 22 (build)                                                    | Bun = 3-5x faster dev server.                                                            |
+| **UI primitives**     | shadcn/ui + Radix                                                             | Copy-paste, own the code. No vendor lock-in.                                             |
+| **Styling**           | Tailwind 4                                                                    | Pairs with shadcn. CSS vars for theming.                                                 |
+| **Animation**         | Framer Motion 11                                                              | Smooth transitions for sunburst zoom, table row appearance.                              |
+| **Charts**            | Apache ECharts (sunburst/treemap), Recharts (simple), Visx (calendar heatmap) | ECharts has best interactive sunburst on web. Click events expose path/depth richly.     |
+| **Table**             | TanStack Table v8 + TanStack Virtual                                          | True cell range selection, virtual scroll, keyboard nav.                                 |
+| **Database**          | PGlite (Postgres-WASM) → OPFS                                                 | Same SQL as the existing SQLite prototype. Persists across reloads. ~3MB gzipped.        |
+| **ORM**               | Drizzle ORM                                                                   | Type-safe, lighter than Prisma, generates readable SQL.                                  |
+| **Analytics queries** | DuckDB-WASM                                                                   | Sub-second SQL on 100K+ rows in browser. Used for monthly aggregations.                  |
+| **State**             | Zustand (atomic) + TanStack Query (cache)                                     | Avoids Redux ceremony. TanStack Query for invalidation after mutations.                  |
+| **Forms**             | React Hook Form + Zod                                                         | Type-safe validation.                                                                    |
+| **PDF parsing**       | PDF.js (in Web Worker)                                                        | Battle-tested. Same regexes as Python prototype.                                         |
+| **Encryption**        | Web Crypto API + Argon2 (via WASM)                                            | AES-256-GCM with passphrase-derived key.                                                 |
+| **PWA**               | next-pwa                                                                      | Installable, offline-capable.                                                            |
+| **Testing**           | Vitest + Playwright + Storybook                                               | Vitest unit/integration; Playwright E2E; Storybook visual regression.                    |
+| **Deploy**            | Cloudflare Pages                                                              | Free tier, fast global CDN, GitHub integration, no cold starts.                          |
+| **Analytics**         | Plausible (self-hosted later, hosted now)                                     | Privacy-first, no cookies, no PII. Aligned with brand.                                   |
+| **Errors**            | Sentry (free tier)                                                            | Crash reports without PII. Configurable scrubbing.                                       |
 
 ## Repo layout (Turborepo monorepo)
 
@@ -124,8 +124,8 @@ splitlens/
 
 export const accounts = pgTable("accounts", {
   id: serial("id").primaryKey(),
-  bank: text("bank").notNull(),        // 'HDFC'
-  type: text("type").notNull(),        // 'savings' | 'credit_card'
+  bank: text("bank").notNull(), // 'HDFC'
+  type: text("type").notNull(), // 'savings' | 'credit_card'
   last4: text("last4").notNull(),
   customerName: text("customer_name"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -135,35 +135,39 @@ export const statements = pgTable("statements", {
   id: serial("id").primaryKey(),
   accountId: integer("account_id").references(() => accounts.id),
   sourceFile: text("source_file").notNull().unique(),
-  periodFrom: text("period_from"),     // ISO date
+  periodFrom: text("period_from"), // ISO date
   periodTo: text("period_to"),
   ingestedAt: timestamp("ingested_at").defaultNow(),
 });
 
-export const transactions = pgTable("transactions", {
-  id: serial("id").primaryKey(),
-  accountId: integer("account_id").references(() => accounts.id),
-  statementId: integer("statement_id").references(() => statements.id),
-  txnDate: text("txn_date").notNull(),  // ISO YYYY-MM-DD
-  narration: text("narration").notNull(),
-  withdrawal: real("withdrawal"),
-  deposit: real("deposit"),
-  closingBalance: real("closing_balance"),
-  category: text("category"),
-  categoryRule: text("category_rule"),
-  sharedWith: text("shared_with"),      // CSV of person ids
-  shareCount: integer("share_count").default(1),
-  notes: text("notes"),
-  reviewed: boolean("reviewed").default(false),
-  sourceRowIdx: integer("source_row_idx").notNull(),
-}, (t) => ({
-  unq: unique().on(t.statementId, t.sourceRowIdx),
-}));
+export const transactions = pgTable(
+  "transactions",
+  {
+    id: serial("id").primaryKey(),
+    accountId: integer("account_id").references(() => accounts.id),
+    statementId: integer("statement_id").references(() => statements.id),
+    txnDate: text("txn_date").notNull(), // ISO YYYY-MM-DD
+    narration: text("narration").notNull(),
+    withdrawal: real("withdrawal"),
+    deposit: real("deposit"),
+    closingBalance: real("closing_balance"),
+    category: text("category"),
+    categoryRule: text("category_rule"),
+    sharedWith: text("shared_with"), // CSV of person ids
+    shareCount: integer("share_count").default(1),
+    notes: text("notes"),
+    reviewed: boolean("reviewed").default(false),
+    sourceRowIdx: integer("source_row_idx").notNull(),
+  },
+  (t) => ({
+    unq: unique().on(t.statementId, t.sourceRowIdx),
+  }),
+);
 
 export const people = pgTable("people", {
-  id: text("id").primaryKey(),          // 'rahul', 'shivam'
+  id: text("id").primaryKey(), // 'rahul', 'shivam'
   displayName: text("display_name").notNull(),
-  upiPatterns: text("upi_patterns"),    // JSON array of regex patterns
+  upiPatterns: text("upi_patterns"), // JSON array of regex patterns
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -172,7 +176,7 @@ export const rules = pgTable("rules", {
   pattern: text("pattern").notNull(),
   category: text("category").notNull(),
   enabled: boolean("enabled").default(true),
-  custom: boolean("custom").default(false),  // user-created vs default
+  custom: boolean("custom").default(false), // user-created vs default
   priority: integer("priority").default(100),
 });
 ```

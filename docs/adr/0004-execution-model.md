@@ -40,6 +40,7 @@ Founder suggested using "10 parallel agents" or a PM/CTO/dev sub-agent pattern f
 ## Founder's role at each milestone
 
 End of each Roadmap week, founder:
+
 1. Pulls latest, runs `pnpm dev`
 2. Validates the vertical slice works end-to-end
 3. Provides feedback on UX (the only thing the founder can validate that I cannot)

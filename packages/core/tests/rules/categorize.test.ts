@@ -7,9 +7,17 @@ const SAMPLE_RULES: CategoryRule[] = [
   { pattern: "USEFULBI", category: "Income:Salary (UsefulBI)", priority: 10 },
   { pattern: "^SALARY", category: "Income:Salary (UsefulBI)", priority: 11 },
   { pattern: "FDBOOKED|FD ?BOOKED", category: "Investment:Fixed Deposit", priority: 20 },
-  { pattern: "RAHUL.*?(9525680445|RAHUL\\.GR8DPS)", category: "Bills:Rent (flatmate share)", priority: 30 },
+  {
+    pattern: "RAHUL.*?(9525680445|RAHUL\\.GR8DPS)",
+    category: "Bills:Rent (flatmate share)",
+    priority: 30,
+  },
   { pattern: "BETHPRASAD ?KADEL|BEDKADEL", category: "Household:Domestic Help", priority: 30 },
-  { pattern: "APPLEMEDIASERVICES|APPLESERVICES|APPLE\\.COM", category: "Subscription:Apple", priority: 40 },
+  {
+    pattern: "APPLEMEDIASERVICES|APPLESERVICES|APPLE\\.COM",
+    category: "Subscription:Apple",
+    priority: 40,
+  },
   { pattern: "BLINKIT|GROFERS", category: "Food:Quick Commerce", priority: 50 },
   { pattern: "ZEPTO", category: "Food:Quick Commerce", priority: 50 },
   { pattern: "SWIGGY", category: "Food:Delivery", priority: 50 },
@@ -45,12 +53,12 @@ describe("categorize", () => {
   });
 
   it("does NOT match other Rahuls (BharatPe merchant, Singh suffix)", () => {
-    expect(categorize("UPI-RAHUL-BHARATPE.9D0K0N0L2D024545@UNITYPE-...", SAMPLE_RULES).category).toBe(
-      "Uncategorized",
-    );
-    expect(categorize("UPI-RAHULKUMARSINGH-6206785781@AXL-UBIN0560308-...", SAMPLE_RULES).category).toBe(
-      "Uncategorized",
-    );
+    expect(
+      categorize("UPI-RAHUL-BHARATPE.9D0K0N0L2D024545@UNITYPE-...", SAMPLE_RULES).category,
+    ).toBe("Uncategorized");
+    expect(
+      categorize("UPI-RAHULKUMARSINGH-6206785781@AXL-UBIN0560308-...", SAMPLE_RULES).category,
+    ).toBe("Uncategorized");
   });
 
   it("matches Bethprasad Kadel both with and without space", () => {

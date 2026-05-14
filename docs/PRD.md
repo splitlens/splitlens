@@ -9,6 +9,7 @@ We win on **trust**, not features. Every other player in this space (Cred, Jupit
 ## 2. Audience
 
 **Primary persona — "The Discerning Engineer"**
+
 - 28-40 years old, urban India (BLR / HYD / Mumbai / Delhi NCR)
 - Income ₹15-50L/yr, often switching jobs / freelancing / consulting
 - Tech-literate, privacy-conscious
@@ -17,12 +18,14 @@ We win on **trust**, not features. Every other player in this space (Cred, Jupit
 - Lives in r/IndianPersonalFinance, r/IndiaInvestments, FinTech Twitter
 
 **Secondary persona — "The Shared-Living Professional"**
+
 - 25-32, lives in a flatshare in BLR / HYD
 - Pays rent through a flatmate, splits utilities, cook, groceries
 - Currently uses Splitwise + a spreadsheet — wants them unified
 - ₹10-25L/yr income, ₹15-25K/mo shared bills
 
 **Anti-persona (NOT for v1):**
+
 - Casual users who want a budgeting app (use YNAB/Walnut)
 - Investors looking for portfolio tracking (use INDmoney/Kuvera)
 - Business owners (use Khatabook/Vyapar)
@@ -83,12 +86,14 @@ Critical: **no servers process user data**. Static HTML/JS hosted on Cloudflare 
 ## 6. Success metrics
 
 ### Launch week (Week 9)
+
 - 500 unique sessions (Plausible)
 - 100 PDFs uploaded
 - 50 GitHub stars on the OSS core
 - Top 5 on ProductHunt for launch day
 
 ### Month 1 post-launch
+
 - 2,000 unique sessions
 - 1,000 active users (returned at least once)
 - 30% week-2 retention
@@ -96,12 +101,14 @@ Critical: **no servers process user data**. Static HTML/JS hosted on Cloudflare 
 - Featured in r/IndianPersonalFinance weekly thread
 
 ### Month 3 post-launch
+
 - 10,000 cumulative users
 - Native iOS + Android in TestFlight / Play Console internal
 - BYOC sync in beta
 - First press mention (Inc42 / YourStory / The Ken)
 
 ### Month 6 (paid tier launch)
+
 - 200 paying users at ₹999/yr (₹2L MRR equivalent)
 - 25,000 cumulative users
 - 3,000 GitHub stars
@@ -109,13 +116,13 @@ Critical: **no servers process user data**. Static HTML/JS hosted on Cloudflare 
 
 ## 7. Open product decisions (need answers)
 
-| # | Decision | My default | Status |
-|---|---|---|---|
-| 1 | Name | **SplitLens** (—) | Defaulted, awaiting confirmation |
-| 2 | Sync strategy | Single-device v1, BYOC v2 | Defaulted |
-| 3 | Open source | AGPL-3.0 for core, proprietary UI | Defaulted |
-| 4 | Pricing | Free v1, paid sync v2 (₹999/yr) | Defaulted |
-| 5 | Geography | India-only at launch (text + INR) | Defaulted |
+| #   | Decision      | My default                        | Status                           |
+| --- | ------------- | --------------------------------- | -------------------------------- |
+| 1   | Name          | **SplitLens** (—)                 | Defaulted, awaiting confirmation |
+| 2   | Sync strategy | Single-device v1, BYOC v2         | Defaulted                        |
+| 3   | Open source   | AGPL-3.0 for core, proprietary UI | Defaulted                        |
+| 4   | Pricing       | Free v1, paid sync v2 (₹999/yr)   | Defaulted                        |
+| 5   | Geography     | India-only at launch (text + INR) | Defaulted                        |
 
 ## 8. Brand voice
 

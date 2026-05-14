@@ -26,8 +26,7 @@ export const metadata: Metadata = {
     url: "https://splitlens.in",
     siteName: "SplitLens",
     title: "SplitLens — Your finances, on your device",
-    description:
-      "Local-first personal finance for Indian banks. Open source. AGPL-3.0.",
+    description: "Local-first personal finance for Indian banks. Open source. AGPL-3.0.",
   },
   twitter: {
     card: "summary_large_image",

@@ -10,7 +10,7 @@
 
 ## What it is
 
-Drop your bank PDF statements into SplitLens. It parses them, categorizes every transaction, surfaces patterns, tracks shared expenses with flatmates, and answers questions like *"how much did I spend on cigarettes in October?"* — all running entirely in your browser.
+Drop your bank PDF statements into SplitLens. It parses them, categorizes every transaction, surfaces patterns, tracks shared expenses with flatmates, and answers questions like _"how much did I spend on cigarettes in October?"_ — all running entirely in your browser.
 
 **Differentiator:** every other personal finance app in India (Cred, Jupiter, Fi, Niyo, INDmoney) sends your bank data to their servers. SplitLens sends nothing, anywhere. No backend, no aggregator, no compliance risk. **Code is open source so you can verify this for yourself.**
 
@@ -38,6 +38,7 @@ PRs welcome — especially **bank parsers** for ICICI, Axis, SBI, and Kotak. See
 ## Why "SplitLens"?
 
 Two product ideas in one name:
+
 1. **Split** — split shared expenses with flatmates / family / friends, settle cleanly
 2. **Lens** — a clear lens through which to view your spending patterns
 

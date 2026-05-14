@@ -11,10 +11,12 @@ Founder requested test-driven development for the rewrite. TDD is unequivocally 
 ## Decision
 
 TDD applies to:
+
 - ✅ `packages/core` — parsers, rules engine, settlement math, encryption, type-safe utilities
 - ✅ Database schema migrations (integration tests with PGlite in-memory)
 
 TDD does NOT apply to:
+
 - ❌ React components (use Storybook + visual regression instead)
 - ❌ Next.js pages (use Playwright E2E for critical paths)
 - ❌ Animations or CSS (visual snapshots only)
@@ -24,12 +26,14 @@ TDD does NOT apply to:
 ## Rationale
 
 ### Where TDD shines (and why we use it for core)
+
 - Pure functions with deterministic inputs and outputs
 - Bugs are expensive (off-by-one rupee = settlement is wrong = trust shattered)
 - Refactors are common (we'll port the parser logic, then improve it 10 times)
 - Test fixtures (sample PDFs) become a community asset for adding new bank parsers
 
 ### Where TDD hurts (and why we don't use it for UI)
+
 - Tests assert implementation details (DOM structure, prop signatures) that change with every refactor
 - "Does the button render" tests provide false confidence and rot fast
 - Mocking React Query / Drizzle / DOM events to "unit test" a component is more code than the component itself
@@ -40,6 +44,7 @@ TDD does NOT apply to:
 `packages/core/tests/` will have heavy coverage (>90%) and will be the source of truth for parser correctness.
 
 `apps/web/` will have:
+
 - Storybook stories for every component (catches visual regressions)
 - Playwright tests for the 5 critical user paths
 - Lighthouse CI gates on every PR

@@ -32,21 +32,18 @@ export const accounts = pgTable(
   }),
 );
 
-export const statements = pgTable(
-  "statements",
-  {
-    id: serial("id").primaryKey(),
-    accountId: integer("account_id")
-      .references(() => accounts.id)
-      .notNull(),
-    sourceFile: text("source_file").notNull().unique(),
-    periodFrom: text("period_from"),
-    periodTo: text("period_to"),
-    pageCount: integer("page_count"),
-    txnCount: integer("txn_count"),
-    ingestedAt: timestamp("ingested_at").defaultNow().notNull(),
-  },
-);
+export const statements = pgTable("statements", {
+  id: serial("id").primaryKey(),
+  accountId: integer("account_id")
+    .references(() => accounts.id)
+    .notNull(),
+  sourceFile: text("source_file").notNull().unique(),
+  periodFrom: text("period_from"),
+  periodTo: text("period_to"),
+  pageCount: integer("page_count"),
+  txnCount: integer("txn_count"),
+  ingestedAt: timestamp("ingested_at").defaultNow().notNull(),
+});
 
 export const transactions = pgTable(
   "transactions",

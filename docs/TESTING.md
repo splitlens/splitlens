@@ -2,23 +2,25 @@
 
 ## TL;DR
 
-| Layer | Tool | Approach | Why |
-|---|---|---|---|
-| `packages/core` | **Vitest** | TDD, 90%+ coverage | Pure logic, deterministic, where bugs hurt most (financial math) |
-| Database queries | Vitest with PGlite in-memory | Integration tests | Verify Drizzle schema + queries produce expected shapes |
-| React components | **Storybook** + visual regression | NOT TDD | Tests for "does the button render" rot fast |
-| Critical user paths | **Playwright** | E2E smoke tests | High value, low maintenance, runs in CI |
-| Performance | Lighthouse CI on every PR | Threshold gates | Ship-quality is a CI assertion, not aspiration |
+| Layer               | Tool                              | Approach           | Why                                                              |
+| ------------------- | --------------------------------- | ------------------ | ---------------------------------------------------------------- |
+| `packages/core`     | **Vitest**                        | TDD, 90%+ coverage | Pure logic, deterministic, where bugs hurt most (financial math) |
+| Database queries    | Vitest with PGlite in-memory      | Integration tests  | Verify Drizzle schema + queries produce expected shapes          |
+| React components    | **Storybook** + visual regression | NOT TDD            | Tests for "does the button render" rot fast                      |
+| Critical user paths | **Playwright**                    | E2E smoke tests    | High value, low maintenance, runs in CI                          |
+| Performance         | Lighthouse CI on every PR         | Threshold gates    | Ship-quality is a CI assertion, not aspiration                   |
 
 ## Why TDD only `packages/core`
 
 **TDD shines** when:
+
 - Logic is pure (no I/O, no DOM, no time)
 - Failure modes are predictable
 - Refactors are common
 - Bugs are expensive (off-by-one rupees → settlement is wrong → user trust shattered)
 
 **TDD hurts** when:
+
 - The tested surface is a UI component that changes weekly
 - Tests assert implementation details (color codes, text labels)
 - Setup is heavier than the assertion ("mount the component, fire 5 events, snapshot 200 lines")
@@ -59,7 +61,7 @@ describe("HDFC Savings PDF parser", () => {
     expect(transactions[0]).toMatchObject({
       txnDate: "2025-04-01",
       narration: expect.stringContaining("UPI-MSREEPRAKASH"),
-      withdrawal: 17.00,
+      withdrawal: 17.0,
       closingBalance: 466579.86,
     });
   });
@@ -95,6 +97,7 @@ describe("HDFC Savings PDF parser", () => {
 ## Test fixtures
 
 `packages/core/tests/fixtures/` will hold **redacted, password-removed** sample PDFs:
+
 - `hdfc-savings-sample-1page.pdf` (5 txns, known values)
 - `hdfc-savings-sample-full.pdf` (full year, balance reconciliation)
 - `hdfc-savings-encrypted.pdf` (password "test" for encryption tests)
@@ -114,7 +117,9 @@ describe("Settlement calculator", () => {
   });
 
   it("3-way split: ₹9000 paid by me with rahul + shivam → each owes ₹3000", () => {
-    const txns = [{ id: 1, amount: 9000, sharedWith: ["rahul", "shivam"], shareCount: 3, dir: "out" }];
+    const txns = [
+      { id: 1, amount: 9000, sharedWith: ["rahul", "shivam"], shareCount: 3, dir: "out" },
+    ];
     const result = computeSettlement(txns, []);
     expect(result.rahul).toEqual({ owesMe: 3000, paidBack: 0, net: 3000 });
     expect(result.shivam).toEqual({ owesMe: 3000, paidBack: 0, net: 3000 });
@@ -122,10 +127,12 @@ describe("Settlement calculator", () => {
 
   it("subtracts repayments from inflows matching person's UPI patterns", () => {
     const txns = [{ id: 1, amount: 9000, sharedWith: ["rahul"], shareCount: 2, dir: "out" }];
-    const inflows = [{ id: 2, amount: 4500, narration: "UPI-RAHULKUMAR-9525680445@YBL-...", dir: "in" }];
+    const inflows = [
+      { id: 2, amount: 4500, narration: "UPI-RAHULKUMAR-9525680445@YBL-...", dir: "in" },
+    ];
     const people = { rahul: { upiPatterns: ["9525680445"] } };
     const result = computeSettlement(txns, inflows, people);
-    expect(result.rahul.net).toEqual(0);  // paid back fully
+    expect(result.rahul.net).toEqual(0); // paid back fully
   });
 });
 ```
@@ -143,8 +150,8 @@ test("first-time user uploads PDF and sees dashboard", async ({ page }) => {
   await page.fill('input[type="password"]', "testpassphrase123");
   await page.click('text="Continue"');
   await page.setInputFiles('input[type="file"]', "tests/fixtures/sample.pdf");
-  await page.waitForSelector('text=/[0-9]+ transactions imported/');
-  await expect(page.locator('canvas')).toBeVisible();  // sunburst
+  await page.waitForSelector("text=/[0-9]+ transactions imported/");
+  await expect(page.locator("canvas")).toBeVisible(); // sunburst
 });
 
 test("user clicks sunburst slice → table filters", async ({ page }) => {
@@ -167,6 +174,7 @@ test("user exports DB and re-imports it cleanly", async ({ page }) => {
 ## Storybook visual regression
 
 Every UI component gets a Storybook story. We use **Chromatic** (free tier 5,000 snapshots/mo) for visual regression on PRs. Catches:
+
 - Unintended color changes
 - Layout shifts
 - Theme breakage
@@ -187,8 +195,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
-      - run: pnpm test       # vitest, must pass
-      - run: pnpm build      # ensures static export works
+      - run: pnpm test # vitest, must pass
+      - run: pnpm build # ensures static export works
   e2e:
     runs-on: ubuntu-latest
     steps:
@@ -216,6 +224,7 @@ jobs:
 ```
 
 Lighthouse budget enforces:
+
 - Performance ≥ 90
 - LCP < 2.5s
 - TBT < 200ms

@@ -7,6 +7,7 @@
 ## Week 0 — Setup (this week, ~10 hrs)
 
 **Pre-code decisions:**
+
 - [ ] Confirm name (default: SplitLens)
 - [ ] Buy domain (`splitlens.app` or `splitlens.in`)
 - [ ] Reserve handles: `@splitlens` on X, `splitlens` on GitHub, ProductHunt, Reddit
@@ -14,12 +15,14 @@
 - [ ] Apply for Google Play Console ($25)
 
 **Sketches** (Figma, ~3-4 hrs total):
+
 - [ ] Landing page hero + value prop
 - [ ] Onboarding (drop PDF → see dashboard)
 - [ ] Main dashboard (sunburst + table layout)
 - [ ] Settlement view
 
 **Repo init:**
+
 - [ ] `pnpm create turbo@latest splitlens`
 - [ ] Add `apps/web` (Next.js), `packages/core`, `packages/db`
 - [ ] Configure ESLint + Prettier + Husky + commitlint
@@ -39,6 +42,7 @@
 - [ ] First commit, first deploy, first Plausible page view
 
 **TDD seeds in `packages/core`:**
+
 - [ ] Test: empty PDF parser returns empty array
 - [ ] Test: empty rules engine returns "Uncategorized"
 - [ ] Test: settlement on empty data returns zero per person
@@ -48,6 +52,7 @@
 **Vertical slice:** Drop a PDF, see parsed txns in a table.
 
 **TDD-first:**
+
 - [ ] Port HDFC savings parser (test cases: 1 month sample → expected txn count + sum reconciliation)
 - [ ] Port HDFC CC v1.6 parser (test: ₹3.17L Apple txn parses correctly)
 - [ ] Port HDFC CC v1.3 parser (test: rewards point + Cr suffix handled)
@@ -64,6 +69,7 @@
 **Vertical slice:** Txns auto-categorize on import; user can re-tag.
 
 **TDD-first:**
+
 - [ ] Port `rules.yaml` to `rules.ts` (type-safe, ordered, regex-based)
 - [ ] Test: each rule matches expected sample narrations
 - [ ] Test: 100+ samples produce expected categories
@@ -137,6 +143,7 @@
 ## Week 9 — Public launch (full week)
 
 **Tuesday (best day for ProductHunt):**
+
 - [ ] Submit to ProductHunt 12:01 AM PST
 - [ ] Day-of: respond to every comment within 30 min
 - [ ] Cross-post to: r/IndianPersonalFinance, r/IndiaInvestments, r/india, r/developersIndia, r/programming, HN Show
@@ -145,6 +152,7 @@
 - [ ] LinkedIn post (lower priority, India audience there)
 
 **Rest of week:**
+
 - [ ] Triage incoming feedback
 - [ ] Hot-fix critical bugs only
 - [ ] Update landing page based on what visitors say in chat / DMs
@@ -159,18 +167,19 @@
 
 ## Risks + mitigations
 
-| Risk | Mitigation |
-|---|---|
-| HDFC changes PDF format → parser breaks | "Report a bad parse" button → users send redacted PDFs to a private repo issue |
-| Beta users find a critical bug | Hold launch — slip Week 9 by a week if needed. Don't launch broken. |
-| ProductHunt flop (likely) | Plan a relaunch in Month 4 with mobile + Sync feature |
-| Over-build features instead of marketing | Discipline: post-launch, half of every week is content/marketing |
-| Burnout at Week 5 | Phase 1 is 9 weeks. Take Week 4 weekend off. Don't compress. |
-| User asks for X bank → you spread thin | Public roadmap: "ICICI in v1.1, vote here". Don't reactively build. |
+| Risk                                     | Mitigation                                                                     |
+| ---------------------------------------- | ------------------------------------------------------------------------------ |
+| HDFC changes PDF format → parser breaks  | "Report a bad parse" button → users send redacted PDFs to a private repo issue |
+| Beta users find a critical bug           | Hold launch — slip Week 9 by a week if needed. Don't launch broken.            |
+| ProductHunt flop (likely)                | Plan a relaunch in Month 4 with mobile + Sync feature                          |
+| Over-build features instead of marketing | Discipline: post-launch, half of every week is content/marketing               |
+| Burnout at Week 5                        | Phase 1 is 9 weeks. Take Week 4 weekend off. Don't compress.                   |
+| User asks for X bank → you spread thin   | Public roadmap: "ICICI in v1.1, vote here". Don't reactively build.            |
 
 ## Definition of Done for MVP
 
 A user can:
+
 1. Visit splitlens.app on a desktop browser
 2. Click "Try it now" → set a passphrase
 3. Drop a year of HDFC PDFs (savings + CC)

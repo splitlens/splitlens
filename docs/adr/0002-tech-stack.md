@@ -8,6 +8,7 @@
 ## Context
 
 Phase 1 is web-only. Phase 2 adds native mobile (iOS + Android). Need a stack that:
+
 - Ships fast as a solo dev (15-30 hrs/week)
 - Looks premium (competing on UX with established fintechs)
 - Allows code reuse for Phase 2 mobile
@@ -15,26 +16,26 @@ Phase 1 is web-only. Phase 2 adds native mobile (iOS + Android). Need a stack th
 
 ## Decision
 
-| Concern | Choice |
-|---|---|
-| App framework | **Next.js 15** (App Router, static export) |
-| Language | **TypeScript strict** |
-| Monorepo | **Turborepo** + **pnpm** |
-| UI primitives | **shadcn/ui** + **Radix** |
-| Styling | **Tailwind 4** |
-| Charts | **Apache ECharts** (sunburst), **Recharts** (simple), **Visx** (calendar heatmap) |
-| Table | **TanStack Table v8** + **TanStack Virtual** |
-| Database | **PGlite** (Postgres-WASM in browser) → OPFS persistence |
-| ORM | **Drizzle** |
-| Analytics queries | **DuckDB-WASM** |
-| State | **Zustand** + **TanStack Query** |
-| Animation | **Framer Motion 11** |
-| PDF | **PDF.js** in **Web Worker** |
-| Forms/Validation | **React Hook Form** + **Zod** |
-| Encryption | **Web Crypto API** + **argon2-browser** |
-| Testing | **Vitest** + **Playwright** + **Storybook** |
-| Deploy | **Cloudflare Pages** (static + edge) |
-| CI | **GitHub Actions** |
+| Concern           | Choice                                                                            |
+| ----------------- | --------------------------------------------------------------------------------- |
+| App framework     | **Next.js 15** (App Router, static export)                                        |
+| Language          | **TypeScript strict**                                                             |
+| Monorepo          | **Turborepo** + **pnpm**                                                          |
+| UI primitives     | **shadcn/ui** + **Radix**                                                         |
+| Styling           | **Tailwind 4**                                                                    |
+| Charts            | **Apache ECharts** (sunburst), **Recharts** (simple), **Visx** (calendar heatmap) |
+| Table             | **TanStack Table v8** + **TanStack Virtual**                                      |
+| Database          | **PGlite** (Postgres-WASM in browser) → OPFS persistence                          |
+| ORM               | **Drizzle**                                                                       |
+| Analytics queries | **DuckDB-WASM**                                                                   |
+| State             | **Zustand** + **TanStack Query**                                                  |
+| Animation         | **Framer Motion 11**                                                              |
+| PDF               | **PDF.js** in **Web Worker**                                                      |
+| Forms/Validation  | **React Hook Form** + **Zod**                                                     |
+| Encryption        | **Web Crypto API** + **argon2-browser**                                           |
+| Testing           | **Vitest** + **Playwright** + **Storybook**                                       |
+| Deploy            | **Cloudflare Pages** (static + edge)                                              |
+| CI                | **GitHub Actions**                                                                |
 
 ## Why each pick (one-liners)
 
@@ -53,12 +54,14 @@ Phase 1 is web-only. Phase 2 adds native mobile (iOS + Android). Need a stack th
 ## Consequences
 
 ### Positive
+
 - **Single codebase deploys to web in Week 1**
 - **Type-safe end-to-end** (Drizzle types flow through)
 - **High performance** (Web Workers, virtual scroll, WASM-native SQL)
 - **Reusable for mobile** — `packages/core` is framework-free, ports to React Native cleanly
 
 ### Negative
+
 - **PGlite is young** (2024+) — minor risk of regressions; mitigated by fallback path to SQLite-WASM
 - **DuckDB-WASM is 5MB** — only loaded on demand for heavy analytics
 - **shadcn/ui isn't an npm package** — components live in our repo, security updates manual; this is by design

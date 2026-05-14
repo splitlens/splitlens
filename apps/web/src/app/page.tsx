@@ -19,9 +19,9 @@ export default function HomePage() {
         </h1>
 
         <p className="max-w-2xl text-xl text-[color:var(--color-muted)]">
-          Drop your HDFC PDFs. SplitLens parses them, categorizes every transaction, and shows
-          you where your money actually went — split shared expenses with flatmates, settle
-          cleanly. <strong className="text-[color:var(--color-fg)]">Nothing leaves your browser.</strong>
+          Drop your HDFC PDFs. SplitLens parses them, categorizes every transaction, and shows you
+          where your money actually went — split shared expenses with flatmates, settle cleanly.{" "}
+          <strong className="text-[color:var(--color-fg)]">Nothing leaves your browser.</strong>
         </p>
 
         <div className="flex flex-wrap gap-3">
@@ -95,11 +95,14 @@ export default function HomePage() {
 
       <hr className="my-20 border-[color:var(--color-border)]" />
 
-      <section id="try" className="space-y-6 rounded-xl border border-[color:var(--color-border)] bg-[color:var(--color-card)] p-10">
+      <section
+        id="try"
+        className="space-y-6 rounded-xl border border-[color:var(--color-border)] bg-[color:var(--color-card)] p-10"
+      >
         <h2 className="text-3xl font-bold">Pre-MVP — coming soon</h2>
         <p className="text-[color:var(--color-muted)]">
-          We&apos;re building in the open. Public launch on ProductHunt is targeted for Week 9.
-          Star the repo to follow along, and you&apos;ll be first to know when the beta opens.
+          We&apos;re building in the open. Public launch on ProductHunt is targeted for Week 9. Star
+          the repo to follow along, and you&apos;ll be first to know when the beta opens.
         </p>
         <div className="flex flex-wrap gap-3">
           <a
@@ -120,7 +123,10 @@ export default function HomePage() {
       <footer className="mt-20 border-t border-[color:var(--color-border)] pt-8 text-sm text-[color:var(--color-muted)]">
         <p>
           SplitLens · AGPL-3.0 · Built by{" "}
-          <a href="https://github.com/prateekaryyan" className="underline hover:text-[color:var(--color-fg)]">
+          <a
+            href="https://github.com/prateekaryyan"
+            className="underline hover:text-[color:var(--color-fg)]"
+          >
             Prateek Aryan
           </a>{" "}
           · Made in Bangalore
