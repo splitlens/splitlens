@@ -9,6 +9,7 @@ import {
   type DashboardSummary,
   type AccountSummary,
 } from "@/lib/repo";
+import { resetDb } from "@/lib/db";
 import { TransactionTable } from "@/components/TransactionTable";
 import { fmtInr, fmtInrExact } from "@/lib/format";
 
@@ -34,6 +35,8 @@ export default function DashboardPage() {
     loading: true,
     error: null,
   });
+  const [reloadKey, setReloadKey] = useState(0);
+  const [resetState, setResetState] = useState<"idle" | "confirming" | "running">("idle");
 
   useEffect(() => {
     let cancelled = false;
@@ -70,7 +73,27 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reloadKey]);
+
+  async function handleReset() {
+    if (resetState === "idle") {
+      setResetState("confirming");
+      // Auto-cancel confirmation after 5s if not clicked again
+      setTimeout(() => setResetState((s) => (s === "confirming" ? "idle" : s)), 5000);
+      return;
+    }
+    if (resetState === "confirming") {
+      setResetState("running");
+      try {
+        await resetDb();
+        setReloadKey((k) => k + 1);
+      } catch (err) {
+        setState((s) => ({ ...s, error: err instanceof Error ? err.message : String(err) }));
+      } finally {
+        setResetState("idle");
+      }
+    }
+  }
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-12">
@@ -182,9 +205,57 @@ export default function DashboardPage() {
             <h2 className="mb-4 text-xl font-semibold">Recent transactions (latest 100)</h2>
             <TransactionTable rows={state.recent} max={100} />
           </section>
+
+          <DangerZone resetState={resetState} onReset={handleReset} />
         </>
       )}
+
+      {state.summary?.statementCount === 0 && (
+        // Even on empty state, allow reset (in case of corrupt half-init)
+        <DangerZone resetState={resetState} onReset={handleReset} />
+      )}
     </main>
+  );
+}
+
+function DangerZone({
+  resetState,
+  onReset,
+}: {
+  resetState: "idle" | "confirming" | "running";
+  onReset: () => void;
+}) {
+  return (
+    <section className="border-[color:var(--color-danger)]/30 bg-[color:var(--color-danger)]/5 mt-16 rounded-xl border p-6">
+      <h2 className="text-sm font-semibold uppercase tracking-wider text-[color:var(--color-danger)]">
+        ⚠️ Danger zone
+      </h2>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <div className="font-semibold">Reset all data</div>
+          <p className="text-sm text-[color:var(--color-muted)]">
+            Drops every account, statement, and transaction from your local DB. PDFs themselves are
+            not affected (they live on your computer). This cannot be undone.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onReset}
+          disabled={resetState === "running"}
+          className={`rounded-md px-5 py-2 text-sm font-semibold transition-colors ${
+            resetState === "confirming"
+              ? "bg-[color:var(--color-danger)] text-white hover:opacity-90"
+              : "border-[color:var(--color-danger)]/40 hover:bg-[color:var(--color-danger)]/10 border text-[color:var(--color-danger)]"
+          } disabled:opacity-50`}
+        >
+          {resetState === "running"
+            ? "Wiping…"
+            : resetState === "confirming"
+              ? "Click again to confirm"
+              : "Reset all data"}
+        </button>
+      </div>
+    </section>
   );
 }
 
