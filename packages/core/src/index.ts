@@ -14,3 +14,4 @@ export * from "./types/index";
 export * from "./parsers/index";
 export * from "./rules/index";
 export * from "./settlement/index";
+export * from "./people/index";

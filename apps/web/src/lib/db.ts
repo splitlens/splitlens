@@ -58,16 +58,21 @@ CREATE TABLE IF NOT EXISTS transactions (
   /** Deterministic identity per real-world transaction. Lets us dedupe across
    * statements with overlapping date ranges (e.g. monthly + yearly). */
   content_hash    TEXT,
+  /** Identified counterparty — references DEFAULT_PEOPLE registry slug.
+   * NULL when the txn isn't to a known person. */
+  person_id       TEXT,
   created_at      TIMESTAMP DEFAULT NOW() NOT NULL,
   CONSTRAINT transactions_source_unique UNIQUE (statement_id, source_row_idx)
 );
 
--- Migration for existing DBs created before content_hash was added.
+-- Migrations for existing DBs (created before these columns existed).
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS content_hash TEXT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS person_id TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_txn_date ON transactions(txn_date);
 CREATE INDEX IF NOT EXISTS idx_txn_account ON transactions(account_id);
 CREATE INDEX IF NOT EXISTS idx_txn_category ON transactions(category);
+CREATE INDEX IF NOT EXISTS idx_txn_person ON transactions(person_id) WHERE person_id IS NOT NULL;
 
 -- Cross-statement deduplication: same (account, content_hash) tuple can only
 -- exist once. The partial index allows older rows with NULL content_hash to

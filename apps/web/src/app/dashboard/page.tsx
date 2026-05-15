@@ -7,12 +7,14 @@ import {
   getAccountsWithSummary,
   getRecentTransactions,
   getSpendByCategory,
+  getPeopleSummary,
   type DashboardSummary,
   type AccountSummary,
   type CategorySummary,
+  type PeopleSummary,
 } from "@/lib/repo";
 import { resetDb } from "@/lib/db";
-import { TransactionTable, CategoryPill } from "@/components/TransactionTable";
+import { TransactionTable, CategoryPill, PersonChip } from "@/components/TransactionTable";
 import { fmtInr, fmtInrExact } from "@/lib/format";
 
 interface State {
@@ -25,8 +27,10 @@ interface State {
     deposit: number | null;
     closingBalance: number | null;
     category: string | null;
+    personId: string | null;
   }>;
   categories: CategorySummary[];
+  people: PeopleSummary[];
   loading: boolean;
   error: string | null;
 }
@@ -37,6 +41,7 @@ export default function DashboardPage() {
     accounts: [],
     recent: [],
     categories: [],
+    people: [],
     loading: true,
     error: null,
   });
@@ -47,11 +52,12 @@ export default function DashboardPage() {
     let cancelled = false;
     (async () => {
       try {
-        const [summary, accounts, recent, categories] = await Promise.all([
+        const [summary, accounts, recent, categories, people] = await Promise.all([
           getDashboardSummary(),
           getAccountsWithSummary(),
           getRecentTransactions(100),
           getSpendByCategory({ excludeNonSpend: true }),
+          getPeopleSummary(),
         ]);
         if (cancelled) return;
         setState({
@@ -64,8 +70,10 @@ export default function DashboardPage() {
             deposit: r.deposit,
             closingBalance: r.closingBalance,
             category: r.category,
+            personId: r.personId,
           })),
           categories,
+          people,
           loading: false,
           error: null,
         });
@@ -219,6 +227,8 @@ export default function DashboardPage() {
             </div>
           </section>
 
+          <TopPeople people={state.people} />
+
           <CategoryBreakdown categories={state.categories} />
 
           <section>
@@ -235,6 +245,80 @@ export default function DashboardPage() {
         <DangerZone resetState={resetState} onReset={handleReset} />
       )}
     </main>
+  );
+}
+
+/**
+ * Top people section. Shows everyone the user has transacted with (from
+ * DEFAULT_PEOPLE registry), sorted by total volume. Net column tells you
+ * "are you ahead or behind with this person" — positive = they owe you.
+ */
+function TopPeople({ people }: { people: PeopleSummary[] }) {
+  if (people.length === 0) return null;
+  return (
+    <section className="mb-10">
+      <div className="mb-4 flex items-baseline justify-between gap-4">
+        <h2 className="text-xl font-semibold">Top people</h2>
+        <p className="text-sm text-[color:var(--color-muted)]">
+          {people.length} {people.length === 1 ? "person" : "people"} identified · sorted by volume
+        </p>
+      </div>
+      <div className="overflow-hidden rounded-xl border border-[color:var(--color-border)] bg-[color:var(--color-card)]">
+        <table className="w-full text-sm">
+          <thead className="bg-black/20 text-xs uppercase tracking-wider text-[color:var(--color-muted)]">
+            <tr>
+              <th className="px-4 py-2 text-left">Person</th>
+              <th className="px-4 py-2 text-right"># Txns</th>
+              <th className="px-4 py-2 text-right">Sent</th>
+              <th className="px-4 py-2 text-right">Received</th>
+              <th className="px-4 py-2 text-right">Net</th>
+              <th className="px-4 py-2 text-right">Last txn</th>
+            </tr>
+          </thead>
+          <tbody>
+            {people.map((p) => (
+              <tr key={p.personId} className="border-[color:var(--color-border)]/50 border-t">
+                <td className="px-4 py-2">
+                  <PersonChip personId={p.personId} />
+                </td>
+                <td className="px-4 py-2 text-right font-mono">
+                  {p.txnCount.toLocaleString("en-IN")}
+                </td>
+                <td className="px-4 py-2 text-right font-mono text-[color:var(--color-danger)]">
+                  {p.totalSent > 0 ? fmtInrExact(p.totalSent) : ""}
+                </td>
+                <td className="px-4 py-2 text-right font-mono text-[color:var(--color-success)]">
+                  {p.totalReceived > 0 ? fmtInrExact(p.totalReceived) : ""}
+                </td>
+                <td
+                  className={`px-4 py-2 text-right font-mono font-semibold ${
+                    p.net > 0
+                      ? "text-[color:var(--color-success)]"
+                      : p.net < 0
+                        ? "text-[color:var(--color-danger)]"
+                        : "text-[color:var(--color-muted)]"
+                  }`}
+                  title={
+                    p.net > 0
+                      ? "You sent more than you received — they may owe you"
+                      : p.net < 0
+                        ? "You received more than you sent — you may owe them"
+                        : "Settled up"
+                  }
+                >
+                  {p.net !== 0 ? fmtInrExact(Math.abs(p.net)) : "—"}
+                  {p.net > 0 && <span className="ml-1 text-xs opacity-60">↑</span>}
+                  {p.net < 0 && <span className="ml-1 text-xs opacity-60">↓</span>}
+                </td>
+                <td className="px-4 py-2 text-right font-mono text-xs text-[color:var(--color-muted)]">
+                  {p.lastTxnDate ?? "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 

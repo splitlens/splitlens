@@ -18,7 +18,7 @@ import type {
   CcStatement,
   CcRawTransaction,
 } from "@splitlens/core";
-import { categorize, DEFAULT_RULES } from "@splitlens/core";
+import { categorize, DEFAULT_RULES, identifyPerson, DEFAULT_PEOPLE } from "@splitlens/core";
 import { getDb } from "./db";
 
 export interface SaveResult {
@@ -278,6 +278,61 @@ export async function getSpendByCategory(
   }));
 }
 
+export interface PeopleSummary {
+  personId: string;
+  displayName: string;
+  relationship: string;
+  txnCount: number;
+  /** Money YOU sent to this person. */
+  totalSent: number;
+  /** Money received from this person. */
+  totalReceived: number;
+  /** Net = totalSent - totalReceived. Positive = they owe you, negative = you owe them. */
+  net: number;
+  /** Most recent txn date (ISO). */
+  lastTxnDate: string | null;
+}
+
+/**
+ * Per-person aggregation. Joins the persisted person_id back to the in-code
+ * registry to enrich with displayName + relationship (denormalized lookup,
+ * cheap because the registry is small).
+ */
+export async function getPeopleSummary(): Promise<PeopleSummary[]> {
+  const db = await getDb();
+  const result = await db.execute<{
+    person_id: string;
+    txn_count: number;
+    total_sent: number;
+    total_received: number;
+    last_txn_date: string;
+  }>(sql`
+    SELECT
+      person_id,
+      COUNT(*)::int                          AS txn_count,
+      COALESCE(SUM(withdrawal), 0)::real     AS total_sent,
+      COALESCE(SUM(deposit), 0)::real        AS total_received,
+      MAX(txn_date)                          AS last_txn_date
+    FROM transactions
+    WHERE person_id IS NOT NULL
+    GROUP BY person_id
+    ORDER BY (COALESCE(SUM(withdrawal), 0) + COALESCE(SUM(deposit), 0)) DESC
+  `);
+  return (result.rows ?? []).map((r) => {
+    const person = DEFAULT_PEOPLE.find((p) => p.id === r.person_id);
+    return {
+      personId: r.person_id,
+      displayName: person?.displayName ?? r.person_id,
+      relationship: person?.relationship ?? "other",
+      txnCount: r.txn_count,
+      totalSent: Number(r.total_sent),
+      totalReceived: Number(r.total_received),
+      net: Number(r.total_sent) - Number(r.total_received),
+      lastTxnDate: r.last_txn_date ?? null,
+    };
+  });
+}
+
 export interface RecentTxn {
   txnDate: string;
   narration: string;
@@ -285,6 +340,7 @@ export interface RecentTxn {
   deposit: number | null;
   closingBalance: number | null;
   category: string | null;
+  personId: string | null;
 }
 
 export async function getRecentTransactions(limit = 100): Promise<RecentTxn[]> {
@@ -296,8 +352,9 @@ export async function getRecentTransactions(limit = 100): Promise<RecentTxn[]> {
     deposit: number | null;
     closing_balance: number | null;
     category: string | null;
+    person_id: string | null;
   }>(sql`
-    SELECT txn_date, narration, withdrawal, deposit, closing_balance, category
+    SELECT txn_date, narration, withdrawal, deposit, closing_balance, category, person_id
     FROM transactions
     ORDER BY txn_date DESC, id DESC
     LIMIT ${limit}
@@ -309,6 +366,7 @@ export async function getRecentTransactions(limit = 100): Promise<RecentTxn[]> {
     deposit: r.deposit,
     closingBalance: r.closing_balance,
     category: r.category,
+    personId: r.person_id,
   }));
 }
 
@@ -383,6 +441,12 @@ function autoCategory(narration: string): { category: string; categoryRule: stri
   return { category: result.category, categoryRule: result.matchedRule };
 }
 
+/** Identify a known person from the narration. Returns null when unknown. */
+function autoPerson(narration: string): string | null {
+  const m = identifyPerson(narration, DEFAULT_PEOPLE);
+  return m?.personId ?? null;
+}
+
 async function bulkInsertTxns(
   accountId: number,
   statementId: number,
@@ -424,15 +488,16 @@ async function bulkInsertTxns(
       }
 
       const { category, categoryRule } = autoCategory(r.narration);
+      const personId = autoPerson(r.narration);
       const result = await db.execute<{ id: number }>(sql`
         INSERT INTO transactions (
           account_id, statement_id, txn_date, value_date, narration, ref_no,
           withdrawal, deposit, closing_balance, source_row_idx, content_hash,
-          category, category_rule
+          category, category_rule, person_id
         ) VALUES (
           ${accountId}, ${statementId}, ${r.txnDate}, ${r.valueDate}, ${r.narration},
           ${r.refNo}, ${r.withdrawal}, ${r.deposit}, ${r.closingBalance}, ${r.sourceRowIdx},
-          ${contentHash}, ${category}, ${categoryRule}
+          ${contentHash}, ${category}, ${categoryRule}, ${personId}
         )
         ON CONFLICT (statement_id, source_row_idx) DO NOTHING
         RETURNING id

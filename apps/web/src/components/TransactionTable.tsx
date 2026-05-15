@@ -1,5 +1,6 @@
 "use client";
 
+import { DEFAULT_PEOPLE } from "@splitlens/core";
 import { fmtDate, fmtInr } from "../lib/format";
 
 /** Group → Tailwind color class. Stable hashing across all surfaces. */
@@ -44,6 +45,33 @@ export interface RowLike {
   deposit?: number | null;
   closingBalance?: number | null;
   category?: string | null;
+  personId?: string | null;
+}
+
+const RELATIONSHIP_EMOJI: Record<string, string> = {
+  family: "👨‍👩‍👧",
+  friend: "🧑‍🤝‍🧑",
+  flatmate: "🏠",
+  partner: "❤️",
+  colleague: "🧑‍💼",
+  domestic_help: "🧹",
+  other: "👤",
+};
+
+export function PersonChip({ personId }: { personId?: string | null }) {
+  if (!personId) return null;
+  const person = DEFAULT_PEOPLE.find((p) => p.id === personId);
+  if (!person) return null;
+  const emoji = RELATIONSHIP_EMOJI[person.relationship] ?? "👤";
+  return (
+    <span
+      title={`${person.displayName} · ${person.relationship}`}
+      className="inline-flex items-center gap-1 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 text-[10px] text-cyan-300"
+    >
+      <span>{emoji}</span>
+      <span className="font-medium">{person.displayName}</span>
+    </span>
+  );
 }
 
 export function TransactionTable({ rows, max = 50 }: { rows: RowLike[]; max?: number }) {
@@ -79,7 +107,10 @@ export function TransactionTable({ rows, max = 50 }: { rows: RowLike[]; max?: nu
                   {fmtDate(row.txnDate)}
                 </td>
                 <td className="px-4 py-2">
-                  <span className="line-clamp-1 font-mono text-xs">{row.narration}</span>
+                  <div className="flex flex-col gap-1">
+                    <span className="line-clamp-1 font-mono text-xs">{row.narration}</span>
+                    {row.personId && <PersonChip personId={row.personId} />}
+                  </div>
                 </td>
                 <td className="px-4 py-2">
                   <CategoryPill category={row.category} />

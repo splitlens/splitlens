@@ -111,13 +111,10 @@ export interface ParseResult {
   transactions: RawTransaction[];
 }
 
-export interface Person {
-  /** Stable id, lowercase, e.g. "rahul" */
-  id: string;
-  displayName: string;
-  /** Regex patterns that match narration of payments to/from this person. */
-  upiPatterns: string[];
-}
+// NOTE: Person type lives in `../people/registry` (richer, with relationship +
+// aliases). Re-imported by settlement directly. This file used to define a
+// thinner version; removed to avoid the duplicate-export ambiguity at the
+// barrel level.
 
 export interface SharedTransaction {
   id: number;

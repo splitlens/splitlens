@@ -1,10 +1,10 @@
 import type {
-  Person,
   Settlement,
   SettlementEntry,
   RawTransaction,
   SharedTransaction,
 } from "../types/index";
+import type { Person } from "../people/registry";
 
 /**
  * Compute net settlement per person from shared expenses + repayment inflows.
