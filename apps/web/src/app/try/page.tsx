@@ -11,8 +11,27 @@ import { fmtInr, fmtInrExact } from "@/lib/format";
 import { saveSavingsResult, saveCcResult, type SaveResult } from "@/lib/repo";
 
 type Result =
-  | { kind: "savings"; data: ParseResult; fileName: string; save?: SaveResult }
-  | { kind: "cc"; data: CcParseResult; fileName: string; save?: SaveResult };
+  | { kind: "savings"; data: ParseResult; fileName: string; save?: SaveResult; saveError?: string }
+  | { kind: "cc"; data: CcParseResult; fileName: string; save?: SaveResult; saveError?: string };
+
+/**
+ * Wrap the save call so a save failure doesn't lose the parse result.
+ * Returns either { save, saveError: undefined } or { save: undefined, saveError: msg }.
+ */
+async function trySave(
+  fn: () => Promise<SaveResult>,
+): Promise<{ save?: SaveResult; saveError?: string }> {
+  try {
+    console.log(`[SplitLens] Saving to local DB…`);
+    const save = await fn();
+    console.log(`[SplitLens] Save result:`, save);
+    return { save };
+  } catch (err) {
+    const msg = err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err);
+    console.error(`[SplitLens] SAVE FAILED:`, err);
+    return { saveError: msg };
+  }
+}
 
 /**
  * Detect a pdfjs PasswordException reliably. pdfjs throws an object with
@@ -57,21 +76,29 @@ export default function TryPage() {
           password: pwd || undefined,
           extractTextPages,
         });
-        let save: SaveResult | undefined;
-        if (data.statement) {
-          save = await saveCcResult(file.name, data.statement, data.transactions);
-        }
-        setResult({ kind: "cc", data, fileName: file.name, save });
+        console.log(
+          `[SplitLens] Parsed CC: ${data.transactions.length} txns, statement=`,
+          data.statement,
+        );
+        const { save, saveError } = await trySave(() => {
+          if (!data.statement) throw new Error("No statement metadata extracted from PDF");
+          return saveCcResult(file.name, data.statement, data.transactions);
+        });
+        setResult({ kind: "cc", data, fileName: file.name, save, saveError });
       } else {
         const data = await parseHdfcSavings(buf, {
           password: pwd || undefined,
           extractPages: extractPagesPositional,
         });
-        let save: SaveResult | undefined;
-        if (data.statement) {
-          save = await saveSavingsResult(file.name, data.statement, data.transactions);
-        }
-        setResult({ kind: "savings", data, fileName: file.name, save });
+        console.log(
+          `[SplitLens] Parsed Savings: ${data.transactions.length} txns, statement=`,
+          data.statement,
+        );
+        const { save, saveError } = await trySave(() => {
+          if (!data.statement) throw new Error("No statement metadata extracted from PDF");
+          return saveSavingsResult(file.name, data.statement, data.transactions);
+        });
+        setResult({ kind: "savings", data, fileName: file.name, save, saveError });
       }
       // Success — clear the pending file
       setPendingFile(null);
@@ -170,11 +197,27 @@ export default function TryPage() {
       )}
 
       {result && <ResultView result={result} />}
+      {result?.saveError && <SavedBanner saveError={result.saveError} />}
     </main>
   );
 }
 
-function SavedBanner({ save }: { save: SaveResult | undefined }) {
+function SavedBanner({ save, saveError }: { save?: SaveResult; saveError?: string }) {
+  if (saveError) {
+    return (
+      <div
+        role="alert"
+        className="border-[color:var(--color-danger)]/40 bg-[color:var(--color-danger)]/10 rounded-md border px-4 py-3 text-sm text-[color:var(--color-danger)]"
+      >
+        ❌ <strong>Save to local DB failed:</strong>
+        <pre className="mt-2 whitespace-pre-wrap font-mono text-xs opacity-90">{saveError}</pre>
+        <p className="mt-2 text-xs opacity-80">
+          Parsing succeeded but persistence didn&apos;t. Open DevTools → Console for full stack. Try
+          the Reset button on /dashboard if you suspect a schema-mismatch issue.
+        </p>
+      </div>
+    );
+  }
   if (!save) return null;
   const { inserted, skippedSameStatement, skippedDuplicate } = save;
 
@@ -210,7 +253,7 @@ function ResultView({ result }: { result: Result }) {
     const totalIn = transactions.reduce((s, t) => s + (t.deposit ?? 0), 0);
     return (
       <section className="space-y-6">
-        <SavedBanner save={result.save} />
+        <SavedBanner save={result.save} saveError={result.saveError} />
         <header className="rounded-xl border border-[color:var(--color-border)] bg-[color:var(--color-card)] p-6">
           <div className="text-sm text-[color:var(--color-muted)]">{result.fileName}</div>
           <h2 className="mt-1 text-2xl font-bold">
