@@ -45,3 +45,5 @@ export function categorizeMany(
 ): CategorizeResult[] {
   return txns.map((t) => categorize(t.narration, rules));
 }
+
+export { DEFAULT_RULES } from "./default-rules";

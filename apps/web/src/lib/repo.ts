@@ -18,6 +18,7 @@ import type {
   CcStatement,
   CcRawTransaction,
 } from "@splitlens/core";
+import { categorize, DEFAULT_RULES } from "@splitlens/core";
 import { getDb } from "./db";
 
 export interface SaveResult {
@@ -231,12 +232,59 @@ export async function getAccountsWithSummary(): Promise<AccountSummary[]> {
   }));
 }
 
+export interface CategorySummary {
+  category: string;
+  /** Top-level group ("Bills", "Food", etc.) — derived from "Group:Sub" by splitting on first ':'. */
+  group: string;
+  txnCount: number;
+  totalOut: number;
+  totalIn: number;
+}
+
+/**
+ * Per-category aggregation. Excludes Investment + Transfer groups by default
+ * because they're not "real" spend (moving money between your own accounts /
+ * to investment vehicles).
+ */
+export async function getSpendByCategory(
+  opts: { excludeNonSpend?: boolean } = {},
+): Promise<CategorySummary[]> {
+  const db = await getDb();
+  const excludeFilter = opts.excludeNonSpend
+    ? sql`AND COALESCE(category, 'Uncategorized') NOT LIKE 'Investment:%' AND COALESCE(category, 'Uncategorized') NOT LIKE 'Transfer:%'`
+    : sql``;
+  const result = await db.execute<{
+    category: string;
+    txn_count: number;
+    total_out: number;
+    total_in: number;
+  }>(sql`
+    SELECT
+      COALESCE(category, 'Uncategorized') AS category,
+      COUNT(*)::int                           AS txn_count,
+      COALESCE(SUM(withdrawal), 0)::real      AS total_out,
+      COALESCE(SUM(deposit), 0)::real         AS total_in
+    FROM transactions
+    WHERE 1=1 ${excludeFilter}
+    GROUP BY COALESCE(category, 'Uncategorized')
+    ORDER BY total_out DESC, total_in DESC
+  `);
+  return (result.rows ?? []).map((r) => ({
+    category: r.category,
+    group: (r.category.split(":")[0] ?? r.category) as string,
+    txnCount: r.txn_count,
+    totalOut: Number(r.total_out),
+    totalIn: Number(r.total_in),
+  }));
+}
+
 export interface RecentTxn {
   txnDate: string;
   narration: string;
   withdrawal: number | null;
   deposit: number | null;
   closingBalance: number | null;
+  category: string | null;
 }
 
 export async function getRecentTransactions(limit = 100): Promise<RecentTxn[]> {
@@ -247,8 +295,9 @@ export async function getRecentTransactions(limit = 100): Promise<RecentTxn[]> {
     withdrawal: number | null;
     deposit: number | null;
     closing_balance: number | null;
+    category: string | null;
   }>(sql`
-    SELECT txn_date, narration, withdrawal, deposit, closing_balance
+    SELECT txn_date, narration, withdrawal, deposit, closing_balance, category
     FROM transactions
     ORDER BY txn_date DESC, id DESC
     LIMIT ${limit}
@@ -259,6 +308,7 @@ export async function getRecentTransactions(limit = 100): Promise<RecentTxn[]> {
     withdrawal: r.withdrawal,
     deposit: r.deposit,
     closingBalance: r.closing_balance,
+    category: r.category,
   }));
 }
 
@@ -319,6 +369,20 @@ interface InsertTxnInput {
   sourceRowIdx: number;
 }
 
+/**
+ * Apply the default rule set to a narration. Returns the matched category +
+ * the rule pattern that matched (for traceability — lets the user understand
+ * "why was this tagged as X?").
+ *
+ * If the user has already tagged a transaction (category column non-null in
+ * a re-import scenario), we DON'T re-categorize on insert; the upsert path
+ * handles that separately.
+ */
+function autoCategory(narration: string): { category: string; categoryRule: string | null } {
+  const result = categorize(narration, DEFAULT_RULES);
+  return { category: result.category, categoryRule: result.matchedRule };
+}
+
 async function bulkInsertTxns(
   accountId: number,
   statementId: number,
@@ -359,14 +423,16 @@ async function bulkInsertTxns(
         continue;
       }
 
+      const { category, categoryRule } = autoCategory(r.narration);
       const result = await db.execute<{ id: number }>(sql`
         INSERT INTO transactions (
           account_id, statement_id, txn_date, value_date, narration, ref_no,
-          withdrawal, deposit, closing_balance, source_row_idx, content_hash
+          withdrawal, deposit, closing_balance, source_row_idx, content_hash,
+          category, category_rule
         ) VALUES (
           ${accountId}, ${statementId}, ${r.txnDate}, ${r.valueDate}, ${r.narration},
           ${r.refNo}, ${r.withdrawal}, ${r.deposit}, ${r.closingBalance}, ${r.sourceRowIdx},
-          ${contentHash}
+          ${contentHash}, ${category}, ${categoryRule}
         )
         ON CONFLICT (statement_id, source_row_idx) DO NOTHING
         RETURNING id

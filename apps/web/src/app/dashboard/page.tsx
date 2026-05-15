@@ -6,11 +6,13 @@ import {
   getDashboardSummary,
   getAccountsWithSummary,
   getRecentTransactions,
+  getSpendByCategory,
   type DashboardSummary,
   type AccountSummary,
+  type CategorySummary,
 } from "@/lib/repo";
 import { resetDb } from "@/lib/db";
-import { TransactionTable } from "@/components/TransactionTable";
+import { TransactionTable, CategoryPill } from "@/components/TransactionTable";
 import { fmtInr, fmtInrExact } from "@/lib/format";
 
 interface State {
@@ -22,7 +24,9 @@ interface State {
     withdrawal: number | null;
     deposit: number | null;
     closingBalance: number | null;
+    category: string | null;
   }>;
+  categories: CategorySummary[];
   loading: boolean;
   error: string | null;
 }
@@ -32,6 +36,7 @@ export default function DashboardPage() {
     summary: null,
     accounts: [],
     recent: [],
+    categories: [],
     loading: true,
     error: null,
   });
@@ -42,10 +47,11 @@ export default function DashboardPage() {
     let cancelled = false;
     (async () => {
       try {
-        const [summary, accounts, recent] = await Promise.all([
+        const [summary, accounts, recent, categories] = await Promise.all([
           getDashboardSummary(),
           getAccountsWithSummary(),
           getRecentTransactions(100),
+          getSpendByCategory({ excludeNonSpend: true }),
         ]);
         if (cancelled) return;
         setState({
@@ -57,7 +63,9 @@ export default function DashboardPage() {
             withdrawal: r.withdrawal,
             deposit: r.deposit,
             closingBalance: r.closingBalance,
+            category: r.category,
           })),
+          categories,
           loading: false,
           error: null,
         });
@@ -211,6 +219,8 @@ export default function DashboardPage() {
             </div>
           </section>
 
+          <CategoryBreakdown categories={state.categories} />
+
           <section>
             <h2 className="mb-4 text-xl font-semibold">Recent transactions (latest 100)</h2>
             <TransactionTable rows={state.recent} max={100} />
@@ -225,6 +235,65 @@ export default function DashboardPage() {
         <DangerZone resetState={resetState} onReset={handleReset} />
       )}
     </main>
+  );
+}
+
+function CategoryBreakdown({ categories }: { categories: CategorySummary[] }) {
+  const spendCats = categories.filter((c) => c.totalOut > 0);
+  if (spendCats.length === 0) {
+    return null;
+  }
+  const max = Math.max(...spendCats.map((c) => c.totalOut));
+  const total = spendCats.reduce((s, c) => s + c.totalOut, 0);
+  const top = spendCats.slice(0, 15);
+
+  return (
+    <section className="mb-10">
+      <div className="mb-4 flex items-baseline justify-between gap-4">
+        <h2 className="text-xl font-semibold">Spend by category</h2>
+        <p className="text-sm text-[color:var(--color-muted)]">
+          {fmtInr(total)} across {spendCats.length} categories · transfers + investments excluded
+        </p>
+      </div>
+      <div className="overflow-hidden rounded-xl border border-[color:var(--color-border)] bg-[color:var(--color-card)]">
+        <ul>
+          {top.map((c) => {
+            const pctOfMax = (c.totalOut / max) * 100;
+            const pctOfTotal = (c.totalOut / total) * 100;
+            return (
+              <li
+                key={c.category}
+                className="border-[color:var(--color-border)]/40 relative grid grid-cols-[1fr_auto_auto] items-center gap-4 border-t px-4 py-3 first:border-t-0"
+              >
+                {/* Background bar */}
+                <div
+                  className="bg-[color:var(--color-accent)]/10 absolute inset-y-0 left-0"
+                  style={{ width: `${pctOfMax}%` }}
+                  aria-hidden
+                />
+                <div className="relative flex items-center gap-3">
+                  <CategoryPill category={c.category} />
+                  <span className="text-xs text-[color:var(--color-muted)]">
+                    {c.txnCount} txn{c.txnCount === 1 ? "" : "s"}
+                  </span>
+                </div>
+                <span className="relative whitespace-nowrap font-mono text-sm">
+                  {pctOfTotal.toFixed(1)}%
+                </span>
+                <span className="relative whitespace-nowrap font-mono font-semibold">
+                  {fmtInrExact(c.totalOut)}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+        {spendCats.length > 15 && (
+          <div className="border-[color:var(--color-border)]/40 border-t px-4 py-2 text-xs text-[color:var(--color-muted)]">
+            … and {spendCats.length - 15} more categories
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 
