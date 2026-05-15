@@ -50,6 +50,13 @@ export interface FormattedSource {
   details: SourceDetailRow[];
   /** Optional itemized list (Swiggy / Zomato / Zepto). */
   items: SourceItem[] | null;
+  /**
+   * Raw OCR lines from a screenshot source, when present. Rendered as a
+   * structured preview (OcrPreview component) inside the expanded card —
+   * with detected order id / status / item rows pulled out. The plain
+   * monospace block lives behind a "Raw" toggle in that component.
+   */
+  ocrLines?: string[] | null;
 }
 
 const ICON_BY_TYPE: Record<string, string> = {
@@ -349,7 +356,9 @@ function formatScreenshotOcr(
   const amount = asNumber(raw.amount);
   const orderId = asString(raw.orderId);
   const itemsRaw = Array.isArray(raw.items) ? raw.items : [];
-  const rawLines = Array.isArray(raw.rawLines) ? raw.rawLines : [];
+  const rawLines = Array.isArray(raw.rawLines)
+    ? (raw.rawLines as string[])
+    : [];
 
   const items: SourceItem[] = itemsRaw.map((i) => {
     const r = i as Record<string, unknown>;
@@ -369,14 +378,6 @@ function formatScreenshotOcr(
     merchant ? { label: "Merchant", value: merchant } : null,
     orderId ? { label: "Order ID", value: orderId, mono: true } : null,
     amount != null ? { label: "Total", value: fmtInr(amount) } : null,
-    rawLines.length > 0
-      ? {
-          label: `OCR text (${rawLines.length} lines)`,
-          value: rawLines.slice(0, 30).join("\n"),
-          block: true,
-          mono: true,
-        }
-      : null,
   ] as Array<SourceDetailRow | null>).filter((r): r is SourceDetailRow => r !== null);
 
   return {
@@ -386,6 +387,7 @@ function formatScreenshotOcr(
     chips,
     details,
     items: items.length > 0 ? items : null,
+    ocrLines: rawLines.length > 0 ? rawLines : null,
   };
 }
 
@@ -419,14 +421,6 @@ function formatManualAttachment(raw: Record<string, unknown>): FormattedSource {
         ? { label: "Size", value: `${fileSize.toLocaleString()} bytes` }
         : null,
       ocrError ? { label: "OCR note", value: ocrError } : null,
-      ocrLines.length > 0
-        ? {
-            label: `OCR text (${ocrLines.length} lines)`,
-            value: ocrLines.slice(0, 30).join("\n"),
-            block: true,
-            mono: true,
-          }
-        : null,
     ] as Array<SourceDetailRow | null>
   ).filter((r): r is SourceDetailRow => r !== null);
 
@@ -437,6 +431,7 @@ function formatManualAttachment(raw: Record<string, unknown>): FormattedSource {
     chips,
     details,
     items: null,
+    ocrLines: ocrLines.length > 0 ? ocrLines : null,
   };
 }
 

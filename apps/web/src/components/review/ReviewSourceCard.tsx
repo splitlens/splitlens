@@ -20,6 +20,7 @@ import { useState } from "react";
 
 import type { ReviewSource } from "@/lib/review-repo";
 import { formatSource } from "./sourceFormat";
+import { OcrPreview } from "./OcrPreview";
 
 export function ReviewSourceCard({ source }: { source: ReviewSource }) {
   const [expanded, setExpanded] = useState(false);
@@ -93,6 +94,13 @@ export function ReviewSourceCard({ source }: { source: ReviewSource }) {
                 <DetailRow key={i} {...row} />
               ))}
             </dl>
+          )}
+
+          {/* OCR preview — structured renderer for screenshot OCR text.
+              Lifts order id / status / item rows out of the raw monospace
+              dump. Has its own "Raw" toggle inside the component. */}
+          {formatted.ocrLines && formatted.ocrLines.length > 0 && (
+            <OcrPreview lines={formatted.ocrLines} />
           )}
 
           {/* Itemized list */}
