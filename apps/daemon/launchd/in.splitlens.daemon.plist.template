@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+ "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd LaunchAgent for splitlens-daemon.
+
+  Installed via `pnpm install-launchd` from apps/daemon, which substitutes
+  the placeholders below with the user's real paths/secrets and copies the
+  resolved file to ~/Library/LaunchAgents/in.splitlens.daemon.plist.
+
+  Placeholders to replace:
+    @REPO_ROOT@      absolute path of the splitlens repo
+    @NODE_BIN@       path to the user's node (output of `which node`)
+    @PNPM_BIN@       path to pnpm (output of `which pnpm`)
+    @PHONEPE_PWD@    PhonePe statement PDF password
+    @HDFC_PWD@       HDFC savings statement PDF password
+    @HDFC_CC_PWD@    HDFC credit card statement PDF password
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>in.splitlens.daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>@PNPM_BIN@</string>
+        <string>--filter</string>
+        <string>@splitlens/daemon</string>
+        <string>start</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>@REPO_ROOT@</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>NODE_BIN</key>
+        <string>@NODE_BIN@</string>
+        <key>PHONEPE_PWD</key>
+        <string>@PHONEPE_PWD@</string>
+        <key>HDFC_PWD</key>
+        <string>@HDFC_PWD@</string>
+        <key>HDFC_CC_PWD</key>
+        <string>@HDFC_CC_PWD@</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>@REPO_ROOT@/apps/daemon/logs/daemon.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>@REPO_ROOT@/apps/daemon/logs/daemon.err.log</string>
+</dict>
+</plist>
