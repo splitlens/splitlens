@@ -9,6 +9,12 @@ const config: NextConfig = {
   transpilePackages: ["@splitlens/core", "@splitlens/db"],
   // typedRoutes graduated from experimental in Next.js 15.5
   typedRoutes: true,
+  // /review's "attach bill" server action posts a base64-encoded file body.
+  // Default cap is 1MB; bump to 40MB so a 25MB image (~33MB after base64)
+  // round-trips cleanly.
+  experimental: {
+    serverActions: { bodySizeLimit: "40mb" },
+  },
   // better-sqlite3 is a native module — Next.js must NOT try to bundle it.
   // Server Components / Route Handlers import it through @splitlens/db.
   serverExternalPackages: ["better-sqlite3"],

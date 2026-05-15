@@ -61,7 +61,7 @@ export interface IngestZeptoInvoiceOptions {
 export async function ingestZeptoInvoice(
   filePath: string,
   db: SplitLensDb,
-  opts: IngestZeptoInvoiceOptions = {},
+  opts: IngestZeptoInvoiceOptions & { forceTransactionId?: number } = {},
 ): Promise<ZeptoInvoiceOutcome> {
   const bytes = new Uint8Array(await readFile(filePath));
   const sourceHash = createHash("sha256").update(bytes).digest("hex");
@@ -87,13 +87,15 @@ export async function ingestZeptoInvoice(
     };
   }
 
+  const { forceTransactionId, ...rest } = opts;
   return writeZeptoInvoiceEnrichment({
     db,
     parsed,
     sourceHash,
     sourceFile: filePath,
     pageCount: pages.length,
-    options: opts,
+    options: rest,
+    forceTransactionId,
   });
 }
 
@@ -104,6 +106,12 @@ export interface WriteZeptoInvoiceArgs {
   sourceFile: string;
   pageCount: number;
   options?: IngestZeptoInvoiceOptions;
+  /**
+   * Skip the date/amount match step and attach to this specific canonical
+   * txn instead. Used by the review-page "attach bill" flow, where the user
+   * has explicitly picked the row they want to enrich.
+   */
+  forceTransactionId?: number;
 }
 
 /**
@@ -116,57 +124,88 @@ export interface WriteZeptoInvoiceArgs {
 export function writeZeptoInvoiceEnrichment(
   args: WriteZeptoInvoiceArgs,
 ): ZeptoInvoiceOutcome {
-  const { db, parsed, sourceHash, sourceFile, pageCount } = args;
+  const { db, parsed, sourceHash, sourceFile, pageCount, forceTransactionId } = args;
   const opts = args.options ?? {};
 
-  // Match policy: look for an outgoing canonical txn that (a) has "zepto" in
-  // its narration or counterparty, (b) sits within ±dateWindowDays of the
-  // invoice date, (c) within ±amountToleranceInr rupees of the invoice
-  // total. We don't require a UTR match because the PDF doesn't carry one.
-  const dateWindowDays = opts.dateWindowDays ?? 1;
-  const amountTol = opts.amountToleranceInr ?? 2;
-  const sinceIso = isoDatePlusDays(parsed.date, -dateWindowDays);
-  const untilIso = isoDatePlusDays(parsed.date, dateWindowDays);
-
-  const candidates = db.all<{
-    id: number;
-    account_id: number;
-    withdrawal: number;
-    txn_date: string;
-  }>(sql`
-    SELECT id, account_id, withdrawal, txn_date
-    FROM transactions
-    WHERE withdrawal IS NOT NULL
-      AND withdrawal > 0
-      AND txn_date >= ${sinceIso}
-      AND txn_date <= ${untilIso}
-      AND (
-        LOWER(narration) LIKE '%zepto%'
-        OR LOWER(counterparty) LIKE '%zepto%'
-      )
-  `);
-
-  // Pick the best candidate: closest on amount, tiebreaker closest on date.
-  let best: (typeof candidates)[number] | null = null;
-  let bestAmtDiff = Infinity;
-  let bestDateDiff = Infinity;
+  // Force-attach mode: skip matching and use the caller-provided txn id.
+  // Used by the review-page "attach bill" UI where the user has already
+  // chosen which canonical row this PDF belongs to.
+  let best:
+    | { id: number; account_id: number; withdrawal: number; txn_date: string }
+    | null = null;
   let nearMisses = 0;
-  for (const c of candidates) {
-    const amtDiff = Math.abs(c.withdrawal - parsed.amount);
-    if (amtDiff > amountTol) {
-      nearMisses++;
-      continue;
+  if (forceTransactionId != null) {
+    const forced = db.get<{
+      id: number;
+      account_id: number;
+      withdrawal: number | null;
+      txn_date: string;
+    }>(sql`
+      SELECT id, account_id, withdrawal, txn_date
+      FROM transactions
+      WHERE id = ${forceTransactionId}
+    `);
+    if (!forced) {
+      return {
+        kind: "no_canonical_match",
+        sourceHash,
+        invoice: parsed,
+        nearMisses: 0,
+      };
     }
-    const dateDiff = Math.abs(
-      (Date.parse(c.txn_date) - Date.parse(parsed.date)) / 86_400_000,
-    );
-    if (
-      amtDiff < bestAmtDiff ||
-      (amtDiff === bestAmtDiff && dateDiff < bestDateDiff)
-    ) {
-      best = c;
-      bestAmtDiff = amtDiff;
-      bestDateDiff = dateDiff;
+    best = {
+      id: forced.id,
+      account_id: forced.account_id,
+      withdrawal: forced.withdrawal ?? 0,
+      txn_date: forced.txn_date,
+    };
+  } else {
+    // Match policy: look for an outgoing canonical txn that (a) has "zepto" in
+    // its narration or counterparty, (b) sits within ±dateWindowDays of the
+    // invoice date, (c) within ±amountToleranceInr rupees of the invoice
+    // total. We don't require a UTR match because the PDF doesn't carry one.
+    const dateWindowDays = opts.dateWindowDays ?? 1;
+    const amountTol = opts.amountToleranceInr ?? 2;
+    const sinceIso = isoDatePlusDays(parsed.date, -dateWindowDays);
+    const untilIso = isoDatePlusDays(parsed.date, dateWindowDays);
+
+    const candidates = db.all<{
+      id: number;
+      account_id: number;
+      withdrawal: number;
+      txn_date: string;
+    }>(sql`
+      SELECT id, account_id, withdrawal, txn_date
+      FROM transactions
+      WHERE withdrawal IS NOT NULL
+        AND withdrawal > 0
+        AND txn_date >= ${sinceIso}
+        AND txn_date <= ${untilIso}
+        AND (
+          LOWER(narration) LIKE '%zepto%'
+          OR LOWER(counterparty) LIKE '%zepto%'
+        )
+    `);
+
+    let bestAmtDiff = Infinity;
+    let bestDateDiff = Infinity;
+    for (const c of candidates) {
+      const amtDiff = Math.abs(c.withdrawal - parsed.amount);
+      if (amtDiff > amountTol) {
+        nearMisses++;
+        continue;
+      }
+      const dateDiff = Math.abs(
+        (Date.parse(c.txn_date) - Date.parse(parsed.date)) / 86_400_000,
+      );
+      if (
+        amtDiff < bestAmtDiff ||
+        (amtDiff === bestAmtDiff && dateDiff < bestDateDiff)
+      ) {
+        best = c;
+        bestAmtDiff = amtDiff;
+        bestDateDiff = dateDiff;
+      }
     }
   }
   if (!best) {
