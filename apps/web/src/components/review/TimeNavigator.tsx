@@ -34,11 +34,33 @@ import { MONTH_SHORT, rangeForSelection } from "@/lib/review-time";
 export interface TimeNavigatorProps {
   buckets: TimeBuckets;
   filter: ReviewListFilter;
+  /**
+   * ISO date of the currently-active txn (the one open in the form on the
+   * right). Used to give a soft "you're viewing this day" accent on the
+   * calendar grid when the user is in month-zoom and hasn't drilled to a
+   * specific day. Distinct from `selectedDay` (which is a hard filter).
+   */
+  activeDate?: string | null;
   onSelect: (patch: Partial<ReviewListFilter>) => void;
 }
 
-export function TimeNavigator({ buckets, filter, onSelect }: TimeNavigatorProps) {
+export function TimeNavigator({
+  buckets,
+  filter,
+  activeDate,
+  onSelect,
+}: TimeNavigatorProps) {
   const { selectedYear, selectedMonth, selectedDay } = buckets;
+
+  // Derive the day-of-month of the active txn — only relevant when we're
+  // already in month-zoom (year + month set, no day filter), and the active
+  // date is inside the selected month.
+  const viewingDay = useMemo<number | null>(() => {
+    if (!activeDate || selectedYear == null || selectedMonth == null) return null;
+    const [y, m, d] = activeDate.split("-").map(Number);
+    if (y !== selectedYear || m !== selectedMonth) return null;
+    return d ?? null;
+  }, [activeDate, selectedYear, selectedMonth]);
 
   const selectYear = (year: number | null) => {
     const { from, to } = rangeForSelection({ year, month: null, day: null });
@@ -167,6 +189,7 @@ export function TimeNavigator({ buckets, filter, onSelect }: TimeNavigatorProps)
               const day = i + 1;
               const count = dayGrid.countByDay.get(day) ?? 0;
               const active = selectedDay === day;
+              const viewing = !active && viewingDay === day;
               return (
                 <button
                   key={day}
@@ -175,17 +198,29 @@ export function TimeNavigator({ buckets, filter, onSelect }: TimeNavigatorProps)
                   className={`relative rounded px-0 py-1 text-center text-[10px] transition-colors ${
                     active
                       ? "bg-indigo-600 text-white"
-                      : count > 0
-                        ? "bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
-                        : "text-zinc-400 hover:bg-zinc-50 dark:text-zinc-600 dark:hover:bg-zinc-800/40"
+                      : viewing
+                        ? "bg-indigo-50 text-indigo-700 ring-1 ring-indigo-300 hover:bg-indigo-100 dark:bg-indigo-950/40 dark:text-indigo-200 dark:ring-indigo-500/40 dark:hover:bg-indigo-950/60"
+                        : count > 0
+                          ? "bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+                          : "text-zinc-400 hover:bg-zinc-50 dark:text-zinc-600 dark:hover:bg-zinc-800/40"
                   }`}
-                  title={count > 0 ? `${count} txn${count === 1 ? "" : "s"}` : "no txns"}
+                  title={
+                    viewing
+                      ? `Viewing this day (${count} txn${count === 1 ? "" : "s"})`
+                      : count > 0
+                        ? `${count} txn${count === 1 ? "" : "s"}`
+                        : "no txns"
+                  }
                 >
                   {day}
                   {count > 0 && (
                     <span
                       className={`absolute -top-0.5 right-0.5 text-[7px] tabular-nums ${
-                        active ? "text-white/70" : "text-zinc-400 dark:text-zinc-500"
+                        active
+                          ? "text-white/70"
+                          : viewing
+                            ? "text-indigo-500 dark:text-indigo-400"
+                            : "text-zinc-400 dark:text-zinc-500"
                       }`}
                     >
                       {count}

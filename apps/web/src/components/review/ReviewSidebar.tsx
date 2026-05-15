@@ -40,6 +40,12 @@ export interface ReviewSidebarProps {
   /** Lightweight people list — used by the active-filter chip label resolver. */
   people: SidebarPeople[];
   activeId: number | null;
+  /**
+   * ISO date of the active txn. Threaded down to TimeNavigator so the
+   * calendar grid can show a "currently viewing" accent on this day, in
+   * sync with the timeline's active column.
+   */
+  activeDate?: string | null;
   onSelectId: (id: number) => void;
   onFilterChange: (patch: Partial<ReviewListFilter & { unreviewed: boolean }>) => void;
   pending: boolean;
@@ -53,6 +59,7 @@ export function ReviewSidebar(props: ReviewSidebarProps) {
     filter,
     people,
     activeId,
+    activeDate,
     onSelectId,
     onFilterChange,
     pending,
@@ -182,6 +189,7 @@ export function ReviewSidebar(props: ReviewSidebarProps) {
         <TimeNavigator
           buckets={buckets}
           filter={filter}
+          activeDate={activeDate}
           onSelect={(patch) => onFilterChange(patch)}
         />
       )}
