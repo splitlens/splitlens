@@ -67,58 +67,17 @@ console.log(receipt);
 - Three merchant parsers — Zepto, Blinkit, Instamart — each with `matches()` + `extract()` and unit tests
 - Matcher (`src/match.ts`) — date ±1 day, amount ±₹2, narration tiebreaker
 
-## What's deferred — daemon integration
+## Daemon integration
 
-The task spec referenced an `apps/daemon/` (chokidar file watcher) and a `packages/email-receipts/` package that don't exist on this branch yet. Once those land, the integration is short:
+Wired into `apps/daemon` — drop a `.png` / `.jpg` / `.jpeg` / `.heic` into `~/Documents/bank/inbox/screenshots/` and the daemon:
 
-```ts
-// apps/daemon/src/process-file.ts
-import { extname } from "node:path";
-import {
-  recognizeText,
-  parseReceipt,
-  matchTxn,
-  VisionUnavailableError,
-} from "@splitlens/ocr";
+1. OCRs it via `recognizeText()`
+2. Picks a parser via `parseReceipt()`
+3. Matches against canonical txns via `matchTxn()` (date ±1d, amount ±₹2, 14-day lookback)
+4. Writes a `transaction_sources` row with `source_type=<merchant>_ocr` and the items / order id / raw lines as `raw_json`
+5. Moves the file to `archive/screenshots/<merchant>/` on success; `unparsed/<name>.error.log` records why on failure
 
-const IMG_EXT = new Set([".png", ".jpg", ".jpeg", ".heic"]);
-
-export async function processScreenshot(filePath: string) {
-  if (!IMG_EXT.has(extname(filePath).toLowerCase())) return;
-
-  let ocr;
-  try {
-    ocr = await recognizeText(filePath);
-  } catch (err) {
-    if (err instanceof VisionUnavailableError) {
-      // surface the install hint to the user, don't crash the daemon
-      console.error(err.message);
-      return moveToUnparsed(filePath, "vision-unavailable");
-    }
-    throw err;
-  }
-
-  const receipt = parseReceipt(ocr.lines);
-  if (!receipt) return moveToUnparsed(filePath, "no-parser-matched");
-
-  const txn = matchTxn(
-    { date: todayIso(), amount: receipt.amount, merchant: receipt.merchant },
-    await loadRecentTxns(),
-  );
-  if (!txn) return moveToUnparsed(filePath, "no-txn-match");
-
-  await attachReceiptToTxn(txn.id, receipt);
-  await moveToArchive(filePath, receipt.merchant);
-}
-```
-
-And in `apps/daemon/src/paths.ts`:
-
-```ts
-export const INBOX_SCREENSHOTS = path.join(INBOX, "screenshots");
-export const ARCHIVE_SCREENSHOTS = path.join(ARCHIVE, "screenshots");
-// per-merchant subdirs are created on demand: archive/screenshots/zepto/, etc.
-```
+The Swift binary is built automatically by `apps/daemon/launchd/install.sh`. If `swiftc` is missing the install logs a warning, the daemon still ingests PDFs, and screenshots route to `unparsed/` with an install-hint log until the binary is built.
 
 ## Notes for future work
 

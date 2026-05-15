@@ -23,7 +23,9 @@
     "@splitlens/db": "workspace:*",
     "@splitlens/email-receipts": "workspace:*",
     "@splitlens/ingest": "workspace:*",
-    "chokidar": "^4.0.3"
+    "@splitlens/ocr": "workspace:*",
+    "chokidar": "^4.0.3",
+    "drizzle-orm": "^0.38.4"
   },
   "devDependencies": {
     "@splitlens/tsconfig": "workspace:*",

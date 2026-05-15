@@ -2,15 +2,25 @@
 /**
  * splitlens-daemon — long-running file watcher.
  *
- * Watches `<bank>/inbox/` for new statement PDFs and feeds them through the
- * @splitlens/ingest pipeline. On success, the file is moved to
- * `archive/<source-type>/`; on classification failure or ingest error, it's
- * moved to `unparsed/` with a sibling `.error.log`.
+ * Two parallel pipelines:
+ *
+ *   1. <bank>/inbox/*.pdf  →  @splitlens/ingest  →  archive/<source-type>/
+ *   2. <bank>/inbox/screenshots/*.{png,jpg,heic}
+ *      → @splitlens/ocr (macOS Vision)
+ *      → matchTxn against the canonical ledger
+ *      → transaction_sources row + archive/screenshots/<merchant>/
+ *
+ * On any failure, files move to `unparsed/<name>` with a `.error.log` sibling
+ * so the user can triage without consulting the daemon's main log.
+ *
+ * Plus a periodic email-backfill pass that fills `txn_time` from HDFC alerts
+ * and attaches Swiggy / Zomato item-level breakdowns to canonical rows.
  *
  * Configuration (all optional, all via env):
  *   SPLITLENS_BANK_ROOT             Root of the bank folder (default: ~/Documents/bank)
  *   SPLITLENS_DB_PATH               SQLite path (default: ~/Library/Application Support/splitlens/splitlens.sqlite)
  *   SPLITLENS_EMAIL_POLL_MINUTES    Periodic email-backfill interval, minutes (default: 30, min: 5, `0` disables)
+ *   SPLITLENS_VISION_BIN            Override the OCR helper binary path
  *   PHONEPE_PWD                     Password for PhonePe PDFs
  *   HDFC_PWD                        Password for HDFC savings PDFs
  *   HDFC_CC_PWD                     Password for HDFC credit-card PDFs
@@ -26,11 +36,16 @@ import chokidar from "chokidar";
 
 import { openDb, closeDb, defaultDbPath } from "@splitlens/db";
 import { loadEmailAccountsFromEnv } from "@splitlens/email-receipts";
-import { backfillTimesFromHdfcAlerts } from "@splitlens/ingest";
+import {
+  backfillSwiggyZomatoItems,
+  backfillTimesFromHdfcAlerts,
+} from "@splitlens/ingest";
+import { findVisionBinary } from "@splitlens/ocr";
 
 import { resolveDaemonPaths, type DaemonPaths } from "./paths";
 import { parsePollIntervalMs, schedulePoll, type ScheduleHandle } from "./poll";
 import { processInboxFile } from "./process-file";
+import { processScreenshotFile } from "./process-screenshot";
 
 function log(msg: string, extra?: Record<string, unknown>) {
   const stamp = new Date().toISOString();
@@ -43,8 +58,10 @@ function log(msg: string, extra?: Record<string, unknown>) {
 
 function ensureDirs(paths: DaemonPaths) {
   mkdirSync(paths.inbox, { recursive: true });
+  mkdirSync(paths.inboxScreenshots, { recursive: true });
   mkdirSync(paths.unparsed, { recursive: true });
   mkdirSync(paths.state, { recursive: true });
+  mkdirSync(paths.archiveScreenshots, { recursive: true });
   for (const dir of Object.values(paths.archive)) mkdirSync(dir, { recursive: true });
 }
 
@@ -93,6 +110,59 @@ async function main() {
 
   watcher.on("error", (e) => log("watcher error", { error: String(e) }));
 
+  // Screenshot watcher: a parallel watcher rooted at inbox/screenshots/ feeds
+  // images through @splitlens/ocr. Kept separate from the PDF watcher so we
+  // don't accidentally pick up images dropped at the inbox root (which would
+  // confuse the filename classifier), and so the chokidar tunables (e.g.
+  // stabilityThreshold) can diverge later if image-save behavior demands it.
+  const visionBin = findVisionBinary();
+  if (visionBin) {
+    log("vision binary available", { path: visionBin });
+  } else {
+    log(
+      "WARNING: splitlens-vision binary not found — screenshot OCR will move " +
+        "files to unparsed/. Build with: pnpm --filter @splitlens/ocr build:swift",
+    );
+  }
+  const screenshotWatcher = chokidar.watch(paths.inboxScreenshots, {
+    persistent: true,
+    ignoreInitial: false,
+    depth: 0,
+    awaitWriteFinish: {
+      stabilityThreshold: 500,
+      pollInterval: 100,
+    },
+  });
+
+  screenshotWatcher.on("add", async (filePath) => {
+    const name = basename(filePath);
+    log("screenshot detected", { name });
+    try {
+      const t0 = Date.now();
+      const processed = await processScreenshotFile(filePath, db, paths);
+      const dt = Date.now() - t0;
+      log(`screenshot processed in ${dt}ms`, {
+        name,
+        outcome: processed.outcome.kind,
+        merchant:
+          "receipt" in processed.outcome ? processed.outcome.receipt.merchant : undefined,
+        txnId:
+          processed.outcome.kind === "ingested"
+            ? processed.outcome.transactionId
+            : undefined,
+      });
+    } catch (e) {
+      log("screenshot unhandled error", {
+        name,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  });
+
+  screenshotWatcher.on("error", (e) =>
+    log("screenshot watcher error", { error: String(e) }),
+  );
+
   // Fire the email-driven time-backfill once at startup, then keep polling
   // on an interval. Skips silently when no GMAIL_USER_* env vars are set.
   // Runs after the watcher is up so it doesn't block file-add events;
@@ -124,7 +194,7 @@ async function main() {
     shuttingDown = true;
     log(`received ${signal}, shutting down`);
     pollHandle?.cancel();
-    await watcher.close();
+    await Promise.all([watcher.close(), screenshotWatcher.close()]);
     closeDb(db);
     process.exit(0);
   };
@@ -135,27 +205,51 @@ async function main() {
 }
 
 async function runEmailBackfillOnce(db: ReturnType<typeof openDb>) {
+  const accounts = loadEmailAccountsFromEnv();
+  if (accounts.length === 0) {
+    log("email backfill skipped: no GMAIL_USER_N / GMAIL_APP_PWD_N env vars configured");
+    return;
+  }
+  log("email backfill starting", { accounts: accounts.map((a) => a.user) });
+
+  // Pass 1 — fill txn_time on bank txns from HDFC InstaAlerts. Cheap (alerts
+  // are small) and high yield (every UPI debit gets one), so we always run it
+  // first.
   try {
-    const accounts = loadEmailAccountsFromEnv();
-    if (accounts.length === 0) {
-      log("email backfill skipped: no GMAIL_USER_N / GMAIL_APP_PWD_N env vars configured");
-      return;
-    }
-    log("email backfill starting", {
-      accounts: accounts.map((a) => a.user),
-    });
     const t0 = Date.now();
     const result = await backfillTimesFromHdfcAlerts(db, accounts, {
       verbose: false,
     });
     const dt = Date.now() - t0;
-    log(`email backfill done in ${dt}ms`, {
+    log(`time-backfill done in ${dt}ms`, {
       candidates: result.candidates,
       filled: result.filled,
       perAccount: result.perAccount,
     });
   } catch (e) {
-    log("email backfill failed", {
+    log("time-backfill failed", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+
+  // Pass 2 — attach Swiggy / Zomato item-level breakdowns. Heavier (per-order
+  // HTML emails), so we run it after the cheap pass. Errors here don't break
+  // the daemon — we just log and move on.
+  try {
+    const t0 = Date.now();
+    const result = await backfillSwiggyZomatoItems(db, accounts, {
+      verbose: false,
+    });
+    const dt = Date.now() - t0;
+    log(`item-enrichment done in ${dt}ms`, {
+      candidates: result.candidates,
+      alreadyEnriched: result.alreadyEnriched,
+      matched: result.matched,
+      unmatched: result.unmatched,
+      perAccount: result.perAccount,
+    });
+  } catch (e) {
+    log("item-enrichment failed", {
       error: e instanceof Error ? e.message : String(e),
     });
   }

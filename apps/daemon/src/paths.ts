@@ -11,9 +11,16 @@ export interface DaemonPaths {
   /** Root of the bank folder, e.g. ~/Documents/bank */
   root: string;
   inbox: string;
+  /** Subdir of inbox for quick-commerce screenshots (Blinkit / Zepto / Instamart). */
+  inboxScreenshots: string;
   unparsed: string;
   /** Per-source archive directories (archive/hdfc-savings, archive/phonepe, …) */
   archive: Record<SourceType, string>;
+  /**
+   * Root archive directory for screenshot receipts. The OCR pipeline creates
+   * per-merchant subdirs lazily: archive/screenshots/zepto/, …/blinkit/, …
+   */
+  archiveScreenshots: string;
   /** Internal state directory — logs, processed-file markers, etc. */
   state: string;
 }
@@ -37,11 +44,14 @@ export function resolveDaemonPaths(root?: string): DaemonPaths {
       join(r, v),
     ]),
   ) as Record<SourceType, string>;
+  const inbox = join(r, "inbox");
   return {
     root: r,
-    inbox: join(r, "inbox"),
+    inbox,
+    inboxScreenshots: join(inbox, "screenshots"),
     unparsed: join(r, "unparsed"),
     archive,
+    archiveScreenshots: join(r, "archive", "screenshots"),
     state: join(r, ".splitlens"),
   };
 }

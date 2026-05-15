@@ -47,6 +47,18 @@ fi
 
 mkdir -p "$TARGET_DIR" "$LOGS_DIR"
 
+# Build the macOS Vision helper for screenshot OCR. Skipped (with a warning)
+# when swiftc isn't present — the daemon stays useful for PDF ingestion even
+# without OCR; screenshots will just route to unparsed/ until the binary is
+# built. Safe to re-run: produces packages/ocr/bin/splitlens-vision.
+if command -v swiftc >/dev/null 2>&1; then
+  echo "Building splitlens-vision (macOS Vision OCR helper) …"
+  ( cd "$REPO_ROOT" && "$PNPM_BIN" --filter @splitlens/ocr build:swift )
+else
+  echo "WARNING: swiftc not on PATH — skipping splitlens-vision build."
+  echo "         Run 'xcode-select --install' then re-run this script to enable screenshot OCR."
+fi
+
 # Bail out if launchd already has it loaded — uninstall first.
 if launchctl list "$LABEL" >/dev/null 2>&1; then
   echo "Unloading existing $LABEL …"

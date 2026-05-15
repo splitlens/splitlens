@@ -33,7 +33,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "build:swift": "swiftc -O src/swift/ocr-helper.swift -o bin/splitlens-vision",
+    "build:swift": "mkdir -p bin && swiftc -O src/swift/ocr-helper.swift -o bin/splitlens-vision",
     "dev": "tsc -p tsconfig.json --watch",
     "test": "vitest run",
     "test:watch": "vitest",
