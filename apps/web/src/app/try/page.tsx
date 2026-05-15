@@ -107,12 +107,6 @@ export default function TryPage() {
   return (
     <main className="mx-auto max-w-6xl px-6 py-12">
       <header className="mb-10">
-        <Link
-          href="/"
-          className="mb-3 inline-block text-sm text-[color:var(--color-muted)] hover:text-[color:var(--color-fg)]"
-        >
-          ← Back to home
-        </Link>
         <h1 className="text-4xl font-bold tracking-tight">Drop your statement</h1>
         <p className="mt-2 max-w-2xl text-[color:var(--color-muted)]">
           The PDF is parsed in this browser tab. <strong>Nothing is uploaded.</strong> Open DevTools
@@ -182,16 +176,29 @@ export default function TryPage() {
 
 function SavedBanner({ save }: { save: SaveResult | undefined }) {
   if (!save) return null;
-  const isReimport = save.skipped > 0 && save.inserted === 0;
+  const { inserted, skippedSameStatement, skippedDuplicate } = save;
+
+  const parts: string[] = [];
+  if (inserted > 0) parts.push(`✅ ${inserted} new`);
+  if (skippedDuplicate > 0)
+    parts.push(`🔁 ${skippedDuplicate} already imported from another statement`);
+  if (skippedSameStatement > 0) parts.push(`♻️ ${skippedSameStatement} re-import`);
+
+  const summary = parts.length > 0 ? parts.join(" · ") : "Nothing to save.";
+
   return (
     <div className="border-[color:var(--color-success)]/40 bg-[color:var(--color-success)]/10 rounded-md border px-4 py-3 text-sm text-[color:var(--color-success)]">
-      💾{" "}
-      {isReimport
-        ? `Already saved earlier — ${save.skipped} transactions in your local DB.`
-        : `Saved ${save.inserted} new transactions to your local browser DB.`}{" "}
+      💾 <strong>Saved to local DB.</strong> {summary}{" "}
       <Link href="/dashboard" className="underline hover:opacity-80">
         Open dashboard →
       </Link>
+      {skippedDuplicate > 0 && (
+        <div className="mt-1 text-xs opacity-80">
+          Cross-statement deduplication: SplitLens recognized these transactions from a different
+          PDF you&apos;ve already uploaded (matched by bank reference number). They aren&apos;t
+          double-counted.
+        </div>
+      )}
     </div>
   );
 }

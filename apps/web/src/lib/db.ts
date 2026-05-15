@@ -54,13 +54,26 @@ CREATE TABLE IF NOT EXISTS transactions (
   notes           TEXT,
   reviewed        BOOLEAN DEFAULT FALSE NOT NULL,
   source_row_idx  INTEGER NOT NULL,
+  /** Deterministic identity per real-world transaction. Lets us dedupe across
+   * statements with overlapping date ranges (e.g. monthly + yearly). */
+  content_hash    TEXT,
   created_at      TIMESTAMP DEFAULT NOW() NOT NULL,
   CONSTRAINT transactions_source_unique UNIQUE (statement_id, source_row_idx)
 );
 
+-- Migration for existing DBs created before content_hash was added.
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS content_hash TEXT;
+
 CREATE INDEX IF NOT EXISTS idx_txn_date ON transactions(txn_date);
 CREATE INDEX IF NOT EXISTS idx_txn_account ON transactions(account_id);
 CREATE INDEX IF NOT EXISTS idx_txn_category ON transactions(category);
+
+-- Cross-statement deduplication: same (account, content_hash) tuple can only
+-- exist once. The partial index allows older rows with NULL content_hash to
+-- coexist; new ingestions always populate content_hash so they'll be deduped.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_txn_content_hash
+  ON transactions(account_id, content_hash)
+  WHERE content_hash IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS people (
   id                 TEXT PRIMARY KEY,

@@ -75,12 +75,6 @@ export default function DashboardPage() {
   return (
     <main className="mx-auto max-w-6xl px-6 py-12">
       <header className="mb-10">
-        <Link
-          href="/"
-          className="mb-3 inline-block text-sm text-[color:var(--color-muted)] hover:text-[color:var(--color-fg)]"
-        >
-          ← Back to home
-        </Link>
         <div className="flex items-end justify-between gap-4">
           <div>
             <h1 className="text-4xl font-bold tracking-tight">Your dashboard</h1>

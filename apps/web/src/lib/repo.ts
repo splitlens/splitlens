@@ -23,8 +23,43 @@ import { getDb } from "./db";
 export interface SaveResult {
   accountId: number;
   statementId: number;
+  /** Inserted as new rows. */
   inserted: number;
+  /** Skipped because the same statement was re-uploaded (idempotent re-import). */
+  skippedSameStatement: number;
+  /** Skipped because the transaction already exists from a DIFFERENT statement
+   * (cross-statement dedup, e.g., monthly statement vs full-year statement
+   * covering the same period). This is the smart dedup the user asked for. */
+  skippedDuplicate: number;
+  /** Total skipped (sum of the two). */
   skipped: number;
+}
+
+/**
+ * Compute a deterministic identity for a transaction so we can dedupe across
+ * statements (e.g., a monthly statement + a year-long statement that overlap).
+ *
+ * Identity = bank's ref_no when available (UPI/NEFT references are globally
+ * unique). Otherwise fall back to (date, amount-sign, amount, narration prefix).
+ */
+function computeContentHash(t: {
+  txnDate: string;
+  refNo?: string | null;
+  withdrawal: number | null;
+  deposit: number | null;
+  narration: string;
+}): string {
+  // Strong signal: bank-provided ref number (UPI/NEFT). Strip leading zeros.
+  const ref = (t.refNo ?? "").replace(/^0+/, "").trim();
+  if (ref.length >= 6) {
+    // ref_no alone is enough for HDFC; pair with date as belt-and-suspenders.
+    return `r:${t.txnDate}:${ref}`;
+  }
+  // Fallback: date + signed amount + first 50 chars of narration (collapsed whitespace)
+  const amount =
+    t.withdrawal != null ? `-${t.withdrawal}` : t.deposit != null ? `+${t.deposit}` : "0";
+  const narr = t.narration.replace(/\s+/g, " ").trim().slice(0, 50);
+  return `f:${t.txnDate}:${amount}:${narr}`;
 }
 
 // ---- Write paths ----
@@ -48,7 +83,7 @@ export async function saveSavingsResult(
     txnCount: txns.length,
   });
 
-  const { inserted, skipped } = await bulkInsertTxns(
+  const result = await bulkInsertTxns(
     accountId,
     statementId,
     txns.map((t) => ({
@@ -62,7 +97,14 @@ export async function saveSavingsResult(
       sourceRowIdx: t.sourceRowIdx,
     })),
   );
-  return { accountId, statementId, inserted, skipped };
+  return {
+    accountId,
+    statementId,
+    inserted: result.inserted,
+    skippedSameStatement: result.skippedSameStatement,
+    skippedDuplicate: result.skippedDuplicate,
+    skipped: result.skippedSameStatement + result.skippedDuplicate,
+  };
 }
 
 export async function saveCcResult(
@@ -84,7 +126,7 @@ export async function saveCcResult(
     txnCount: txns.length,
   });
 
-  const { inserted, skipped } = await bulkInsertTxns(
+  const result = await bulkInsertTxns(
     accountId,
     statementId,
     txns.map((t) => ({
@@ -98,7 +140,14 @@ export async function saveCcResult(
       sourceRowIdx: t.sourceRowIdx,
     })),
   );
-  return { accountId, statementId, inserted, skipped };
+  return {
+    accountId,
+    statementId,
+    inserted: result.inserted,
+    skippedSameStatement: result.skippedSameStatement,
+    skippedDuplicate: result.skippedDuplicate,
+    skipped: result.skippedSameStatement + result.skippedDuplicate,
+  };
 }
 
 // ---- Read queries ----
@@ -274,36 +323,61 @@ async function bulkInsertTxns(
   accountId: number,
   statementId: number,
   rows: InsertTxnInput[],
-): Promise<{ inserted: number; skipped: number }> {
+): Promise<{ inserted: number; skippedSameStatement: number; skippedDuplicate: number }> {
   const db = await getDb();
-  if (rows.length === 0) return { inserted: 0, skipped: 0 };
+  if (rows.length === 0) return { inserted: 0, skippedSameStatement: 0, skippedDuplicate: 0 };
 
-  // Insert one row at a time but inside a single transaction. Could batch later
-  // if it becomes a perf bottleneck (1k rows ~ 100-200ms in PGlite is fine).
   let inserted = 0;
-  let skipped = 0;
+  let skippedSameStatement = 0;
+  let skippedDuplicate = 0;
 
   await db.execute(sql`BEGIN`);
   try {
     for (const r of rows) {
+      const contentHash = computeContentHash({
+        txnDate: r.txnDate,
+        refNo: r.refNo,
+        withdrawal: r.withdrawal,
+        deposit: r.deposit,
+        narration: r.narration,
+      });
+
+      // Two layers of dedup, distinguished for the user:
+      //   1. (statement_id, source_row_idx) — re-uploading the SAME PDF
+      //   2. (account_id, content_hash)     — same txn from a DIFFERENT PDF
+      // Postgres ON CONFLICT can target only one constraint per statement,
+      // so we check the cross-statement dedup first, then attempt the insert.
+      const existing = await db.execute<{ id: number; statement_id: number }>(sql`
+        SELECT id, statement_id FROM transactions
+        WHERE account_id = ${accountId} AND content_hash = ${contentHash}
+        LIMIT 1
+      `);
+      if ((existing.rows?.length ?? 0) > 0) {
+        const sameStatement = existing.rows![0]!.statement_id === statementId;
+        if (sameStatement) skippedSameStatement++;
+        else skippedDuplicate++;
+        continue;
+      }
+
       const result = await db.execute<{ id: number }>(sql`
         INSERT INTO transactions (
           account_id, statement_id, txn_date, value_date, narration, ref_no,
-          withdrawal, deposit, closing_balance, source_row_idx
+          withdrawal, deposit, closing_balance, source_row_idx, content_hash
         ) VALUES (
           ${accountId}, ${statementId}, ${r.txnDate}, ${r.valueDate}, ${r.narration},
-          ${r.refNo}, ${r.withdrawal}, ${r.deposit}, ${r.closingBalance}, ${r.sourceRowIdx}
+          ${r.refNo}, ${r.withdrawal}, ${r.deposit}, ${r.closingBalance}, ${r.sourceRowIdx},
+          ${contentHash}
         )
         ON CONFLICT (statement_id, source_row_idx) DO NOTHING
         RETURNING id
       `);
       if ((result.rows?.length ?? 0) > 0) inserted++;
-      else skipped++;
+      else skippedSameStatement++;
     }
     await db.execute(sql`COMMIT`);
   } catch (err) {
     await db.execute(sql`ROLLBACK`);
     throw err;
   }
-  return { inserted, skipped };
+  return { inserted, skippedSameStatement, skippedDuplicate };
 }
