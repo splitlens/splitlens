@@ -8,11 +8,12 @@
  * moved to `unparsed/` with a sibling `.error.log`.
  *
  * Configuration (all optional, all via env):
- *   SPLITLENS_BANK_ROOT    Root of the bank folder (default: ~/Documents/bank)
- *   SPLITLENS_DB_PATH      SQLite path (default: ~/Library/Application Support/splitlens/splitlens.sqlite)
- *   PHONEPE_PWD            Password for PhonePe PDFs
- *   HDFC_PWD               Password for HDFC savings PDFs
- *   HDFC_CC_PWD            Password for HDFC credit-card PDFs
+ *   SPLITLENS_BANK_ROOT             Root of the bank folder (default: ~/Documents/bank)
+ *   SPLITLENS_DB_PATH               SQLite path (default: ~/Library/Application Support/splitlens/splitlens.sqlite)
+ *   SPLITLENS_EMAIL_POLL_MINUTES    Periodic email-backfill interval, minutes (default: 30, min: 5, `0` disables)
+ *   PHONEPE_PWD                     Password for PhonePe PDFs
+ *   HDFC_PWD                        Password for HDFC savings PDFs
+ *   HDFC_CC_PWD                     Password for HDFC credit-card PDFs
  *
  * Backlog: chokidar emits "add" events for every file already in inbox/ at
  * startup, so re-launching the daemon after a crash re-tries any unprocessed
@@ -28,6 +29,7 @@ import { loadEmailAccountsFromEnv } from "@splitlens/email-receipts";
 import { backfillTimesFromHdfcAlerts } from "@splitlens/ingest";
 
 import { resolveDaemonPaths, type DaemonPaths } from "./paths";
+import { parsePollIntervalMs, schedulePoll, type ScheduleHandle } from "./poll";
 import { processInboxFile } from "./process-file";
 
 function log(msg: string, extra?: Record<string, unknown>) {
@@ -91,10 +93,29 @@ async function main() {
 
   watcher.on("error", (e) => log("watcher error", { error: String(e) }));
 
-  // Fire the email-driven time-backfill once at startup. Skips silently when
-  // no GMAIL_USER_* env vars are set. Runs after the watcher is up so it
-  // doesn't block file-add events; failures don't bring the daemon down.
-  void runEmailBackfillOnce(db);
+  // Fire the email-driven time-backfill once at startup, then keep polling
+  // on an interval. Skips silently when no GMAIL_USER_* env vars are set.
+  // Runs after the watcher is up so it doesn't block file-add events;
+  // failures don't bring the daemon down.
+  const pollIntervalMs = parsePollIntervalMs(process.env.SPLITLENS_EMAIL_POLL_MINUTES);
+  let pollHandle: ScheduleHandle | null = null;
+  void (async () => {
+    await runEmailBackfillOnce(db);
+    if (pollIntervalMs === null) {
+      log("email backfill polling disabled (SPLITLENS_EMAIL_POLL_MINUTES=0)");
+      return;
+    }
+    const minutes = Math.round(pollIntervalMs / 60_000);
+    log(`next email sync in ${minutes}m`);
+    pollHandle = schedulePoll(pollIntervalMs, () => runEmailBackfillOnce(db), {
+      onSkip: () =>
+        log("email backfill tick skipped (previous cycle still running)"),
+      onError: (e) =>
+        log("email backfill scheduler error", {
+          error: e instanceof Error ? e.message : String(e),
+        }),
+    });
+  })();
 
   // Trap SIGTERM/SIGINT so launchd can stop us cleanly.
   let shuttingDown = false;
@@ -102,6 +123,7 @@ async function main() {
     if (shuttingDown) return;
     shuttingDown = true;
     log(`received ${signal}, shutting down`);
+    pollHandle?.cancel();
     await watcher.close();
     closeDb(db);
     process.exit(0);
