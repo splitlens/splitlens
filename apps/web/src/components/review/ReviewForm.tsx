@@ -29,6 +29,7 @@ import {
 } from "@/app/review/actions";
 
 import { BillAttachDropzone } from "./BillAttachDropzone";
+import { ReviewSourceCard } from "./ReviewSourceCard";
 
 export interface ReviewFormProps {
   txn: ReviewTransactionDetail;
@@ -329,39 +330,31 @@ export function ReviewForm({
         )}
       </div>
 
-      {/* Sources — read-only ledger of every extractor that's touched this row */}
+      {/* Sources — every extractor that's touched this row. Each card has
+          always-visible key chips + click-to-expand for the full detail
+          (items list for receipts, UTR/ref for bank rows, etc.). */}
       <div className="border-t border-zinc-100 px-6 py-4 dark:border-zinc-800">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-          Sources ({txn.sources.length})
-        </h3>
+        <div className="flex items-baseline justify-between">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+            Sources ({txn.sources.length})
+          </h3>
+          {txn.sources.length > 0 && (
+            <span className="text-[10px] text-zinc-400 dark:text-zinc-500">
+              Click a card to expand
+            </span>
+          )}
+        </div>
         {txn.sources.length === 0 ? (
           <p className="mt-2 text-xs italic text-zinc-500 dark:text-zinc-400">
             No source rows. This shouldn't normally happen — every canonical
             txn is observed by at least one parser.
           </p>
         ) : (
-          <ul className="mt-2 space-y-1.5">
+          <div className="mt-2 space-y-1.5">
             {txn.sources.map((s) => (
-              <li
-                key={s.id}
-                className="rounded-md border border-zinc-100 bg-zinc-50 px-3 py-2 text-xs dark:border-zinc-800 dark:bg-zinc-800/40"
-              >
-                <div className="flex items-baseline justify-between gap-2">
-                  <span className="font-medium text-zinc-700 dark:text-zinc-200">
-                    {s.summary}
-                  </span>
-                  <code className="text-[10px] text-zinc-500 dark:text-zinc-500">
-                    {s.sourceType}
-                  </code>
-                </div>
-                {s.archivePath && (
-                  <div className="mt-0.5 truncate text-[10px] text-zinc-500 dark:text-zinc-400">
-                    📎 {s.archivePath}
-                  </div>
-                )}
-              </li>
+              <ReviewSourceCard key={s.id} source={s} />
             ))}
-          </ul>
+          </div>
         )}
       </div>
 
