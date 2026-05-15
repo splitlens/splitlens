@@ -2,6 +2,7 @@ import type { RecentTxn } from "@/lib/repo";
 import { fmtInr, fmtDate } from "@/lib/format";
 import { KindBadge } from "./TopCounterparties";
 import { ShareTxnButton } from "@/components/friends/ShareTxnButton";
+import { FindEmailsButton } from "@/components/friends/FindEmailsButton";
 import type { PersonOption } from "@/components/friends/ShareTxnModal";
 
 /**
@@ -94,20 +95,27 @@ export function RecentTxnsCard({
                     {t.deposit != null ? fmtInr(t.deposit) : ""}
                   </td>
                   <td className="py-2 align-top text-right">
-                    <ShareTxnButton
-                      txn={{
-                        id: t.id,
-                        txnDate: t.txnDate,
-                        txnTime: t.txnTime,
-                        withdrawal: t.withdrawal,
-                        counterparty: t.counterparty,
-                        narration: t.narration,
-                        category: t.category,
-                        initialSharedWith: t.sharedWith,
-                      }}
-                      people={people}
-                      isShared={t.sharedWith.length > 0}
-                    />
+                    <div className="flex items-center justify-end gap-1.5">
+                      <FindEmailsButton
+                        txnId={t.id}
+                        label={label}
+                        amount={t.withdrawal ?? t.deposit}
+                      />
+                      <ShareTxnButton
+                        txn={{
+                          id: t.id,
+                          txnDate: t.txnDate,
+                          txnTime: t.txnTime,
+                          withdrawal: t.withdrawal,
+                          counterparty: t.counterparty,
+                          narration: t.narration,
+                          category: t.category,
+                          initialSharedWith: t.sharedWith,
+                        }}
+                        people={people}
+                        isShared={t.sharedWith.length > 0}
+                      />
+                    </div>
                   </td>
                 </tr>
               );
