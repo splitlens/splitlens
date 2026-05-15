@@ -165,6 +165,7 @@ export function ReviewLayout(props: ReviewLayoutProps) {
           meta={meta}
           buckets={buckets}
           filter={filter}
+          people={people}
           activeId={activeId}
           onSelectId={goToId}
           onFilterChange={setFilter}

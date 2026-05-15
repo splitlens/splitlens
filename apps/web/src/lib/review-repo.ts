@@ -47,8 +47,9 @@ export interface ReviewListFilter {
    * Sort order in the sidebar list.
    *   - "desc" (default) — newest first (the dashboard convention)
    *   - "asc"            — oldest first, useful for chronological review
+   *   - null / undefined — falls back to "desc"
    */
-  sort?: "asc" | "desc";
+  sort?: "asc" | "desc" | null;
   /**
    * Time-of-day bucket: "morning" (06-12), "afternoon" (12-17),
    * "evening" (17-21), "night" (21-06). Filters rows by `txn_time`.

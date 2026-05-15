@@ -3,12 +3,16 @@
 /**
  * ReviewForm — the editable form on the right of /review.
  *
- * Sections:
- *   - Header     — read-only fact ribbon (date, time, amount, ref no, account)
- *   - Editable   — counterparty, category, narration, notes, person link
- *   - Sources    — read-only list of every extractor / parser that produced
- *                  data for this row, with raw_json detail on demand
- *   - Bill       — drag-and-drop attach zone, shows existing files first
+ * Layout (top to bottom):
+ *   - Header     — date + time (primary read), amount alongside (smaller),
+ *                  meta line for account / UTR / reviewed pill
+ *   - Counterparty + Category — the two fields the user touches most often.
+ *                  Counterparty shows a one-click "Suggested" pill when the
+ *                  canonical row's counterparty is empty but we can extract
+ *                  one from the bank narration (e.g. "M Sree Prakash").
+ *   - Sources    — every extractor that produced data for this row
+ *   - More fields (collapsed by default) — Person, Narration, Notes
+ *   - Attach bill (collapsed by default) — drag-and-drop dropzone
  *   - Actions    — Save / Save+mark reviewed / Skip / Mark only / Unmark
  *
  * Form state: local React state with diff-vs-original tracking. We don't
@@ -18,10 +22,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { ReviewTransactionDetail } from "@/lib/review-repo";
-import { fmtInr, fmtDate } from "@/lib/format";
+import { fmtInr } from "@/lib/format";
+import { extractCounterpartyFromNarration } from "@/lib/narration";
 import {
   updateTransaction,
-  attachBillToTransaction,
   markReviewed,
   unmarkReviewed,
   type TransactionEdits,
@@ -30,6 +34,29 @@ import {
 
 import { BillAttachDropzone } from "./BillAttachDropzone";
 import { ReviewSourceCard } from "./ReviewSourceCard";
+
+const DAY_OF_WEEK = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTH_LONG = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+function fmtLongDate(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return iso;
+  const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+  return `${DAY_OF_WEEK[dow]}, ${d} ${MONTH_LONG[m - 1]} ${y}`;
+}
 
 export interface ReviewFormProps {
   txn: ReviewTransactionDetail;
@@ -76,14 +103,34 @@ export function ReviewForm({
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
-  const counterpartyRef = useRef<HTMLInputElement>(null);
 
-  // Auto-focus the counterparty field on mount/txn-change so keyboard
-  // editing is one-handed. If the user already started typing somewhere
-  // else, this won't steal focus (focus() is harmless then).
+  // Progressive-disclosure state — both default closed so the form's
+  // resting state is short. Auto-open "more fields" when this txn already
+  // has a person / notes set (so the user sees the existing data).
+  const hasExistingMore = Boolean(
+    txn.personId || (txn.notes && txn.notes.trim().length > 0),
+  );
+  const [moreOpen, setMoreOpen] = useState(hasExistingMore);
+  const [attachOpen, setAttachOpen] = useState(false);
+
+  const counterpartyRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     counterpartyRef.current?.focus();
   }, [txn.id]);
+
+  // Re-evaluate "more open" when the txn id changes — different rows have
+  // different "has existing data" answers.
+  useEffect(() => {
+    setMoreOpen(hasExistingMore);
+    setAttachOpen(false);
+  }, [txn.id, hasExistingMore]);
+
+  // Suggested counterparty from narration — only when the form's
+  // counterparty field is empty. One-click accept.
+  const suggestedCounterparty = useMemo(() => {
+    if (form.counterparty.trim().length > 0) return null;
+    return extractCounterpartyFromNarration(txn.narration);
+  }, [form.counterparty, txn.narration]);
 
   const dirty = useMemo(() => {
     return (
@@ -95,7 +142,6 @@ export function ReviewForm({
     );
   }, [form, original]);
 
-  /** Build the edits payload (only changed fields). */
   const buildEdits = useCallback(
     (markReviewedFlag: boolean): TransactionEdits => {
       const e: TransactionEdits = {};
@@ -162,9 +208,7 @@ export function ReviewForm({
     }
   }, [txn.id, onAfterSave]);
 
-  // Keyboard shortcuts — register at the form level so they only fire while
-  // /review is rendered. Skipped when a typing element has focus (handled
-  // inside the listener).
+  // Keyboard shortcuts at the form level — only fire when no input has focus.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -176,7 +220,6 @@ export function ReviewForm({
           target.tagName === "SELECT" ||
           target.isContentEditable)
       ) {
-        // Only allow Ctrl+S/Cmd+S equivalent? Not here. Let typing flow.
         return;
       }
       if (e.key === "s" || e.key === "S") {
@@ -196,45 +239,63 @@ export function ReviewForm({
 
   return (
     <article className="rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-      {/* Header ribbon — facts that can't be edited */}
-      <header className="flex flex-wrap items-baseline justify-between gap-3 border-b border-zinc-100 px-6 py-4 dark:border-zinc-800">
-        <div>
-          <div className="text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-            Transaction #{txn.id}
-            {txn.reviewed && (
-              <span className="ml-2 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
-                REVIEWED
-              </span>
-            )}
-          </div>
-          <div className="mt-1 flex items-baseline gap-2">
-            <span className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-              {fmtDate(txn.txnDate)}
-            </span>
+      {/* ============================ HEADER ================================
+          Date+time leads as the orienting fact. Amount lives alongside at
+          a smaller size — the user just clicked here from the sidebar, the
+          amount isn't news. Status pill + meta line carry the rest.
+      */}
+      <header className="border-b border-zinc-100 px-6 py-4 dark:border-zinc-800">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+          <div className="flex items-baseline gap-3">
+            <h2 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+              {fmtLongDate(txn.txnDate)}
+            </h2>
             {txn.txnTime && (
-              <span className="text-sm tabular-nums text-zinc-500 dark:text-zinc-400">
+              <span className="text-base tabular-nums text-zinc-500 dark:text-zinc-400">
                 {txn.txnTime}
               </span>
             )}
           </div>
-          <div className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-            {txn.account.bank} {txn.account.type} •••{txn.account.last4}
-            {txn.refNo && <span className="ml-2">UTR: <code>{txn.refNo}</code></span>}
+          <div
+            className={`text-xl font-semibold tabular-nums ${
+              direction === "debit"
+                ? "text-rose-700 dark:text-rose-400"
+                : "text-emerald-700 dark:text-emerald-400"
+            }`}
+            title={direction === "debit" ? "Money out" : "Money in"}
+          >
+            {direction === "debit" ? "−" : "+"}
+            {fmtInr(amount)}
           </div>
         </div>
-        <div
-          className={`text-3xl font-semibold tabular-nums ${
-            direction === "debit"
-              ? "text-rose-700 dark:text-rose-400"
-              : "text-emerald-700 dark:text-emerald-400"
-          }`}
-        >
-          {direction === "debit" ? "−" : "+"}
-          {fmtInr(amount)}
+        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+          <span>
+            Txn <code className="text-[10px]">#{txn.id}</code>
+          </span>
+          <span>
+            {txn.account.bank} {txn.account.type} •••{txn.account.last4}
+          </span>
+          {txn.refNo && (
+            <span>
+              UTR <code className="text-[10px]">{txn.refNo}</code>
+            </span>
+          )}
+          {txn.reviewed ? (
+            <span className="rounded-full bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+              Reviewed
+            </span>
+          ) : (
+            <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+              Unreviewed
+            </span>
+          )}
         </div>
       </header>
 
-      {/* Editable fields */}
+      {/* ====================== PRIMARY EDITS =============================
+          The two fields touched on almost every row. Counterparty has an
+          inline suggestion pill when empty — one click accepts.
+      */}
       <div className="space-y-4 px-6 py-5">
         <Field label="Counterparty" hint="Who this txn was with — clean human name.">
           <input
@@ -245,24 +306,37 @@ export function ReviewForm({
             placeholder="(unknown)"
             className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
           />
+          {suggestedCounterparty && (
+            <button
+              type="button"
+              onClick={() =>
+                setForm({ ...form, counterparty: suggestedCounterparty })
+              }
+              className="mt-1.5 inline-flex items-baseline gap-1.5 rounded-md border border-indigo-200 bg-indigo-50 px-2 py-1 text-[11px] text-indigo-700 hover:bg-indigo-100 dark:border-indigo-900/50 dark:bg-indigo-950/40 dark:text-indigo-200 dark:hover:bg-indigo-950/70"
+              title="Use this name extracted from the bank narration"
+            >
+              <span aria-hidden>💡</span>
+              <span className="text-indigo-500 dark:text-indigo-400">Suggested:</span>
+              <span className="font-medium">{suggestedCounterparty}</span>
+              <span className="text-indigo-500 dark:text-indigo-400">· Use this</span>
+            </button>
+          )}
         </Field>
 
         <Field label="Category">
-          <div className="flex gap-2">
-            <input
-              type="text"
-              list="category-options"
-              value={form.category}
-              onChange={(e) => setForm({ ...form, category: e.target.value })}
-              placeholder="Food:Restaurant"
-              className="flex-1 rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
-            />
-            <datalist id="category-options">
-              {categoryOptions.map((c) => (
-                <option key={c} value={c} />
-              ))}
-            </datalist>
-          </div>
+          <input
+            type="text"
+            list="category-options"
+            value={form.category}
+            onChange={(e) => setForm({ ...form, category: e.target.value })}
+            placeholder="Food:Restaurant"
+            className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+          />
+          <datalist id="category-options">
+            {categoryOptions.map((c) => (
+              <option key={c} value={c} />
+            ))}
+          </datalist>
           {txn.categoryRule && form.category === original.category && (
             <p className="mt-1 text-[11px] italic text-zinc-500 dark:text-zinc-400">
               Auto-categorized by rule: <code>{txn.categoryRule}</code>
@@ -270,48 +344,7 @@ export function ReviewForm({
           )}
         </Field>
 
-        <Field
-          label="Person"
-          hint="Link this txn to someone in your registry (e.g. a flatmate). Different from sharing."
-        >
-          <select
-            value={form.personId}
-            onChange={(e) => setForm({ ...form, personId: e.target.value })}
-            className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
-          >
-            <option value="">— Not linked —</option>
-            {people.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.displayName} ({p.relationship}) · {p.txnCount} txn{p.txnCount === 1 ? "" : "s"}
-              </option>
-            ))}
-          </select>
-        </Field>
-
-        <Field label="Narration" hint="The bank's verbatim line. Rarely needs editing.">
-          <textarea
-            value={form.narration}
-            onChange={(e) => setForm({ ...form, narration: e.target.value })}
-            rows={2}
-            placeholder="(empty)"
-            className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 font-mono text-xs leading-relaxed focus:border-indigo-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
-          />
-        </Field>
-
-        <Field label="Notes" hint="Free-form. Useful for context only you can give.">
-          <textarea
-            value={form.notes}
-            onChange={(e) => setForm({ ...form, notes: e.target.value })}
-            rows={2}
-            placeholder="(empty)"
-            className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
-          />
-        </Field>
-
-        {/* Sharing block — link to the existing Friends share modal isn't
-            inlined here to keep this form focused; sharing edits live in
-            the dashboard's drill-down. Reviewers see the current state
-            though so they can spot mismatches. */}
+        {/* Sharing — only when set, never editable here. */}
         {(txn.sharedWith.length > 0 || txn.shareCount > 1) && (
           <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs dark:border-amber-900/50 dark:bg-amber-950/30">
             <span className="font-medium text-amber-700 dark:text-amber-300">
@@ -330,9 +363,7 @@ export function ReviewForm({
         )}
       </div>
 
-      {/* Sources — every extractor that's touched this row. Each card has
-          always-visible key chips + click-to-expand for the full detail
-          (items list for receipts, UTR/ref for bank rows, etc.). */}
+      {/* ========================= SOURCES ================================ */}
       <div className="border-t border-zinc-100 px-6 py-4 dark:border-zinc-800">
         <div className="flex items-baseline justify-between">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
@@ -358,17 +389,90 @@ export function ReviewForm({
         )}
       </div>
 
-      {/* Bill attach */}
-      <div className="border-t border-zinc-100 px-6 py-4 dark:border-zinc-800">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-          Attach a bill / receipt
-        </h3>
-        <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
-          Drop a Zepto invoice PDF (best — parsed inline with items) or a
-          quick-commerce screenshot. Force-attaches to <em>this</em> txn —
-          bypasses the daemon's auto-match.
-        </p>
-        <div className="mt-2">
+      {/* ===================== MORE FIELDS (collapsed) ===================== */}
+      <details
+        open={moreOpen}
+        onToggle={(e) => setMoreOpen((e.target as HTMLDetailsElement).open)}
+        className="border-t border-zinc-100 dark:border-zinc-800"
+      >
+        <summary className="flex cursor-pointer items-baseline justify-between px-6 py-3 text-xs text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800/40">
+          <span className="flex items-baseline gap-1.5">
+            <span aria-hidden>{moreOpen ? "▾" : "▸"}</span>
+            <span className="font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+              {moreOpen ? "Less" : "More"} fields
+            </span>
+            {!moreOpen && (
+              <span className="text-[10px] text-zinc-400 dark:text-zinc-500">
+                · Person · Narration · Notes
+              </span>
+            )}
+          </span>
+        </summary>
+        <div className="space-y-4 px-6 pb-5">
+          <Field
+            label="Person"
+            hint="Link this txn to someone in your registry (e.g. a flatmate). Different from sharing."
+          >
+            <select
+              value={form.personId}
+              onChange={(e) => setForm({ ...form, personId: e.target.value })}
+              className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+            >
+              <option value="">— Not linked —</option>
+              {people.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.displayName} ({p.relationship}) · {p.txnCount} txn
+                  {p.txnCount === 1 ? "" : "s"}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field
+            label="Narration"
+            hint="The bank's verbatim line. Rarely needs editing."
+          >
+            <textarea
+              value={form.narration}
+              onChange={(e) => setForm({ ...form, narration: e.target.value })}
+              rows={2}
+              placeholder="(empty)"
+              className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 font-mono text-xs leading-relaxed focus:border-indigo-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+            />
+          </Field>
+
+          <Field label="Notes" hint="Free-form. Useful for context only you can give.">
+            <textarea
+              value={form.notes}
+              onChange={(e) => setForm({ ...form, notes: e.target.value })}
+              rows={2}
+              placeholder="(empty)"
+              className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+            />
+          </Field>
+        </div>
+      </details>
+
+      {/* ===================== ATTACH BILL (collapsed) ===================== */}
+      <details
+        open={attachOpen}
+        onToggle={(e) => setAttachOpen((e.target as HTMLDetailsElement).open)}
+        className="border-t border-zinc-100 dark:border-zinc-800"
+      >
+        <summary className="flex cursor-pointer items-baseline justify-between px-6 py-3 text-xs text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800/40">
+          <span className="flex items-baseline gap-1.5">
+            <span aria-hidden>{attachOpen ? "▾" : "+"}</span>
+            <span className="font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+              Attach a bill / receipt
+            </span>
+          </span>
+        </summary>
+        <div className="px-6 pb-5">
+          <p className="mb-2 text-[11px] text-zinc-500 dark:text-zinc-400">
+            Drop a Zepto invoice PDF (best — parsed inline with items) or a
+            quick-commerce screenshot. Force-attaches to <em>this</em> txn —
+            bypasses the daemon's auto-match.
+          </p>
           <BillAttachDropzone
             txnId={txn.id}
             onAttached={(r) => {
@@ -388,9 +492,9 @@ export function ReviewForm({
             }}
           />
         </div>
-      </div>
+      </details>
 
-      {/* Actions */}
+      {/* ============================ ACTIONS ============================= */}
       <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-100 bg-zinc-50/60 px-6 py-4 dark:border-zinc-800 dark:bg-zinc-900/60">
         <div className="flex items-center gap-2 text-[11px] text-zinc-500 dark:text-zinc-400">
           <Kbd>J</Kbd>/<Kbd>K</Kbd> prev/next · <Kbd>N</Kbd> next unreviewed ·{" "}
@@ -485,5 +589,4 @@ function Kbd({ children }: { children: React.ReactNode }) {
   );
 }
 
-// Re-export the type so the parent doesn't need a separate import path.
 export type { AttachBillResult };
