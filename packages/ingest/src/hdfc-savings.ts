@@ -17,6 +17,12 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import { parseHdfcSavingsPages } from "@splitlens/core/parsers";
+import {
+  categorize,
+  DEFAULT_RULES,
+  identifyPerson,
+  DEFAULT_PEOPLE,
+} from "@splitlens/core";
 import type { ParseResult, RawTransaction } from "@splitlens/core";
 import {
   accounts,
@@ -150,11 +156,16 @@ export function writeHdfcSavingsIngest(
 
       if (matchedId) {
         matchedExisting++;
+        const { category, matchedRule } = categorize(t.narration, DEFAULT_RULES);
+        const person = identifyPerson(t.narration, DEFAULT_PEOPLE);
         mergeIntoCanonical(tx, matchedId, {
           narration: t.narration,
           valueDate: t.valueDate ?? null,
           closingBalance: t.closingBalance ?? null,
           refNo: canonicalRef,
+          category,
+          categoryRule: matchedRule,
+          personId: person?.personId ?? null,
         });
       } else {
         newTransactions++;
@@ -221,6 +232,8 @@ export function canonicalRefForHdfc(t: RawTransaction): string | null {
 }
 
 function hdfcRowToCanonical(t: RawTransaction, accountId: number, canonicalRef: string | null) {
+  const { category, matchedRule } = categorize(t.narration, DEFAULT_RULES);
+  const person = identifyPerson(t.narration, DEFAULT_PEOPLE);
   return {
     accountId,
     txnDate: t.txnDate,
@@ -230,5 +243,8 @@ function hdfcRowToCanonical(t: RawTransaction, accountId: number, canonicalRef: 
     withdrawal: t.withdrawal,
     deposit: t.deposit,
     closingBalance: t.closingBalance ?? null,
+    category,
+    categoryRule: matchedRule,
+    personId: person?.personId ?? null,
   };
 }

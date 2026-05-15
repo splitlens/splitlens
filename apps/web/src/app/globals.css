@@ -1,23 +1,53 @@
 @import "tailwindcss";
 
+/* Light theme is the default; dark variants kick in when the OS prefers dark.
+ * Both themes share the same accent/success/danger; only the background +
+ * neutral surfaces shift. Tailwind 4's `dark:` utilities also use the same
+ * prefers-color-scheme media query, so we stay consistent across CSS vars
+ * and Tailwind classes. */
+
+:root {
+  --bg: #fafafa;        /* zinc-50 */
+  --fg: #18181b;        /* zinc-900 */
+  --muted: #71717a;     /* zinc-500 */
+  --card: #ffffff;
+  --border: #e4e4e7;    /* zinc-200 */
+  --accent: #4f46e5;    /* indigo-600 */
+  --success: #059669;
+  --danger: #dc2626;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #09090b;      /* zinc-950 */
+    --fg: #fafafa;      /* zinc-50 */
+    --muted: #a1a1aa;   /* zinc-400 */
+    --card: #18181b;    /* zinc-900 */
+    --border: #27272a;  /* zinc-800 */
+    --accent: #818cf8;  /* indigo-400 */
+    --success: #34d399;
+    --danger: #f87171;
+  }
+}
+
 @theme {
-  --color-bg: #0b0d0f;
-  --color-fg: #f5f5f5;
-  --color-muted: #8b8d92;
-  --color-accent: #f5a524;
-  --color-accent-fg: #0b0d0f;
-  --color-success: #10b981;
-  --color-danger: #ef4444;
-  --color-card: #14171a;
-  --color-border: #1f2326;
+  --color-bg: var(--bg);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-card: var(--card);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-fg: #ffffff;
+  --color-success: var(--success);
+  --color-danger: var(--danger);
 
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
 html, body {
-  background: var(--color-bg);
-  color: var(--color-fg);
+  background: var(--bg);
+  color: var(--fg);
   font-family: var(--font-sans);
   font-feature-settings: "ss01", "cv11";
   -webkit-font-smoothing: antialiased;
@@ -26,4 +56,22 @@ html, body {
 
 * {
   box-sizing: border-box;
+}
+
+/* SVG cell palette for heatmap + calendar. Two colors that auto-flip with
+ * the OS theme — the rest of the gradient (indigo / blue mid-tones) reads
+ * fine on both backgrounds without adjustment. */
+:root {
+  --cell-empty: #f4f4f5;       /* zinc-100 in light */
+  --cell-empty-stroke: rgba(0,0,0,0.03);
+  --cell-low: #eef2ff;          /* indigo-50 in light */
+  --svg-label: #71717a;         /* zinc-500 */
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --cell-empty: #1f1f24;     /* slightly lighter than card */
+    --cell-empty-stroke: rgba(255,255,255,0.04);
+    --cell-low: #1e1b4b;        /* indigo-950 */
+    --svg-label: #a1a1aa;       /* zinc-400 */
+  }
 }

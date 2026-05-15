@@ -27,6 +27,12 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import { parsePhonePeText } from "@splitlens/core/parsers";
+import {
+  categorize,
+  DEFAULT_RULES,
+  identifyPerson,
+  DEFAULT_PEOPLE,
+} from "@splitlens/core";
 import type { PhonePeParseResult, PhonePeRawTransaction } from "@splitlens/core";
 import {
   accounts,
@@ -178,11 +184,19 @@ export function writePhonePeIngest(args: WritePhonePeIngestArgs): IngestResult {
         matchedExisting++;
         // PhonePe contributes time-of-day, clean counterparty, and kind.
         // The merger fills these in iff the existing canonical has them NULL.
+        // Re-derive category/person on the rich synthetic narration so a
+        // PhonePe-second ingest can still backfill an HDFC-first row.
+        const synthNarration = `UPI-${t.counterparty}-${t.kind}-${t.utr}`;
+        const { category, matchedRule } = categorize(synthNarration, DEFAULT_RULES);
+        const person = identifyPerson(synthNarration, DEFAULT_PEOPLE);
         mergeIntoCanonical(tx, matchedId, {
           txnTime: t.txnTime,
           counterparty: t.counterparty,
           counterpartyKind: t.kind,
           refNo: t.utr,
+          category,
+          categoryRule: matchedRule,
+          personId: person?.personId ?? null,
         });
       } else {
         newTransactions++;
@@ -240,6 +254,14 @@ function pickStatementAccountId(
 }
 
 function phonepeRowToCanonical(t: PhonePeRawTransaction, accountId: number) {
+  // Categorize against the cleanest text we have. PhonePe gives us the
+  // counterparty separately, but most rules patterns key off the broader
+  // bank-narration shape — so feed a synthetic "narration" that mirrors what
+  // an HDFC UPI row would look like for the same counterparty. The rules
+  // engine tolerates both shapes; this combined form gets the best coverage.
+  const synthNarration = `UPI-${t.counterparty}-${t.kind}-${t.utr}`;
+  const { category, matchedRule } = categorize(synthNarration, DEFAULT_RULES);
+  const person = identifyPerson(synthNarration, DEFAULT_PEOPLE);
   return {
     accountId,
     txnDate: t.txnDate,
@@ -249,5 +271,8 @@ function phonepeRowToCanonical(t: PhonePeRawTransaction, accountId: number) {
     refNo: t.utr,
     counterparty: t.counterparty,
     counterpartyKind: t.kind,
+    category,
+    categoryRule: matchedRule,
+    personId: person?.personId ?? null,
   };
 }

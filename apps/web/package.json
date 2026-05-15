@@ -4,7 +4,7 @@
   "private": true,
   "license": "AGPL-3.0-only",
   "scripts": {
-    "dev": "next dev --turbopack",
+    "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
@@ -15,14 +15,15 @@
     "clean": "rm -rf .next .turbo node_modules/.cache"
   },
   "dependencies": {
-    "@electric-sql/pglite": "^0.4.5",
     "@splitlens/core": "workspace:*",
     "@splitlens/db": "workspace:*",
     "drizzle-orm": "^0.38.4",
     "next": "^15.1.4",
     "pdfjs-dist": "^4.10.38",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "recharts": "^3.8.1",
+    "server-only": "^0.0.1"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.5",

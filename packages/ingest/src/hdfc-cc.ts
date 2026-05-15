@@ -20,6 +20,12 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import { parseHdfcCcText } from "@splitlens/core/parsers";
+import {
+  categorize,
+  DEFAULT_RULES,
+  identifyPerson,
+  DEFAULT_PEOPLE,
+} from "@splitlens/core";
 import type { CcParseResult, CcRawTransaction } from "@splitlens/core";
 import {
   accounts,
@@ -166,6 +172,8 @@ export function writeHdfcCcIngest(
 }
 
 function ccRowToCanonical(t: CcRawTransaction, accountId: number) {
+  const { category, matchedRule } = categorize(t.description, DEFAULT_RULES);
+  const person = identifyPerson(t.description, DEFAULT_PEOPLE);
   return {
     accountId,
     txnDate: t.txnDate,
@@ -175,5 +183,8 @@ function ccRowToCanonical(t: CcRawTransaction, accountId: number) {
     // CC payments → deposit (you paid the card off).
     withdrawal: t.isPayment ? null : t.amount,
     deposit: t.isPayment ? t.amount : null,
+    category,
+    categoryRule: matchedRule,
+    personId: person?.personId ?? null,
   };
 }
