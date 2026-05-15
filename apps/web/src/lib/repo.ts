@@ -1066,14 +1066,46 @@ export interface ItemEnrichment {
 }
 
 /**
- * Parse the raw_json blob written by backfillSwiggyZomatoItems back into
- * the UI-facing ItemEnrichment shape. Returns null when the blob doesn't
- * look like one of ours (defensive — old rows or future format changes).
+ * Parse the raw_json blob written by an enrichment source (Swiggy / Zomato
+ * email, or Zepto invoice PDF) back into the UI-facing ItemEnrichment
+ * shape. Returns null when the blob doesn't look like one of ours.
+ *
+ * The source_type tells us which shape to expect:
+ *   - swiggy_email / zomato_email → blob has {extractorId, kind, restaurant,
+ *     orderId, amount, items[{qty, name, price?}], summary}
+ *   - zepto_invoice → blob has {orderNo, invoiceNo, date, amount,
+ *     items[{seq, name, qty, amount}]}
  */
-function parseItemEnrichment(rawJson: string | null): ItemEnrichment | null {
+function parseItemEnrichment(
+  rawJson: string | null,
+  sourceType: string,
+): ItemEnrichment | null {
   if (!rawJson) return null;
   try {
     const obj = JSON.parse(rawJson) as Record<string, unknown>;
+    if (sourceType === "zepto_invoice") {
+      const items = Array.isArray(obj.items)
+        ? (obj.items as Array<Record<string, unknown>>)
+            .map((it) => ({
+              qty: Number(it.qty ?? 1),
+              name: String(it.name ?? ""),
+              // The invoice's per-line `amount` IS the line total in INR.
+              // The UI's ItemEnrichment uses `price` for the same notion.
+              price: it.amount != null ? Number(it.amount) : undefined,
+            }))
+            .filter((it) => it.name.length > 0)
+        : [];
+      return {
+        extractorId: "zepto_invoice",
+        kind: "instamart", // closest analogue in the existing icon set
+        orderId: obj.orderNo != null ? String(obj.orderNo) : null,
+        restaurant: null,
+        amount: Number(obj.amount ?? 0),
+        items,
+        summary: `Zepto order — ${items.length} item${items.length === 1 ? "" : "s"}`,
+      };
+    }
+    // Email-receipt shape (swiggy_email / zomato_email)
     const items = Array.isArray(obj.items)
       ? (obj.items as Array<Record<string, unknown>>)
           .map((it) => ({
@@ -1109,16 +1141,20 @@ function parseItemEnrichment(rawJson: string | null): ItemEnrichment | null {
 function getItemEnrichmentsForTxns(ids: number[]): Map<number, ItemEnrichment> {
   const out = new Map<number, ItemEnrichment>();
   if (ids.length === 0) return out;
-  const rows = db().all<{ transaction_id: number; raw_json: string }>(sql`
-    SELECT transaction_id, raw_json
+  const rows = db().all<{
+    transaction_id: number;
+    source_type: string;
+    raw_json: string;
+  }>(sql`
+    SELECT transaction_id, source_type, raw_json
     FROM transaction_sources
-    WHERE source_type IN ('swiggy_email', 'zomato_email')
+    WHERE source_type IN ('swiggy_email', 'zomato_email', 'zepto_invoice')
       AND transaction_id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
     ORDER BY id ASC
   `);
   for (const r of rows) {
     if (out.has(r.transaction_id)) continue;
-    const parsed = parseItemEnrichment(r.raw_json);
+    const parsed = parseItemEnrichment(r.raw_json, r.source_type);
     if (parsed) out.set(r.transaction_id, parsed);
   }
   return out;
