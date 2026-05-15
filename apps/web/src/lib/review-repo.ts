@@ -384,6 +384,7 @@ function archivePathFor(
     "zepto_ocr",
     "blinkit_ocr",
     "instamart_ocr",
+    "manual_attachment",
   ]);
   if (!BILL_SOURCES.has(sourceType)) return null;
   return statementSourceFile;

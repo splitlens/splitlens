@@ -19,6 +19,7 @@
     "@splitlens/db": "workspace:*",
     "@splitlens/email-receipts": "workspace:*",
     "@splitlens/ingest": "workspace:*",
+    "@splitlens/ocr": "workspace:*",
     "drizzle-orm": "^0.38.4",
     "next": "^15.1.4",
     "pdfjs-dist": "^4.10.38",

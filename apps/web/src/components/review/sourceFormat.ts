@@ -65,6 +65,7 @@ const ICON_BY_TYPE: Record<string, string> = {
   zepto_ocr: "🛒",
   blinkit_ocr: "🛒",
   instamart_ocr: "🛒",
+  manual_attachment: "📎",
 };
 
 const TITLE_BY_TYPE: Record<string, string> = {
@@ -80,6 +81,7 @@ const TITLE_BY_TYPE: Record<string, string> = {
   zepto_ocr: "Zepto screenshot",
   blinkit_ocr: "Blinkit screenshot",
   instamart_ocr: "Instamart screenshot",
+  manual_attachment: "Manual attachment",
 };
 
 function asString(v: unknown): string | null {
@@ -387,6 +389,57 @@ function formatScreenshotOcr(
   };
 }
 
+function formatManualAttachment(raw: Record<string, unknown>): FormattedSource {
+  const fileName = asString(raw.fileName);
+  const mime = asString(raw.mimeType);
+  const fileSize = asNumber(raw.fileSize);
+  const ocrLines = Array.isArray(raw.ocrLines) ? (raw.ocrLines as string[]) : [];
+  const ocrError = asString(raw.ocrError);
+
+  const chips: SourceChip[] = [];
+  if (mime) chips.push({ label: "Type", value: mime });
+  if (fileSize != null) {
+    chips.push({
+      label: "Size",
+      value:
+        fileSize > 1024 * 1024
+          ? `${(fileSize / 1024 / 1024).toFixed(1)} MB`
+          : `${Math.max(1, Math.round(fileSize / 1024))} KB`,
+    });
+  }
+  if (ocrLines.length > 0) {
+    chips.push({ label: "OCR", value: `${ocrLines.length} lines` });
+  }
+
+  const details: SourceDetailRow[] = (
+    [
+      fileName ? { label: "File name", value: fileName, mono: true } : null,
+      mime ? { label: "Type", value: mime } : null,
+      fileSize != null
+        ? { label: "Size", value: `${fileSize.toLocaleString()} bytes` }
+        : null,
+      ocrError ? { label: "OCR note", value: ocrError } : null,
+      ocrLines.length > 0
+        ? {
+            label: `OCR text (${ocrLines.length} lines)`,
+            value: ocrLines.slice(0, 30).join("\n"),
+            block: true,
+            mono: true,
+          }
+        : null,
+    ] as Array<SourceDetailRow | null>
+  ).filter((r): r is SourceDetailRow => r !== null);
+
+  return {
+    icon: ICON_BY_TYPE.manual_attachment!,
+    title: TITLE_BY_TYPE.manual_attachment!,
+    subtitle: fileName,
+    chips,
+    details,
+    items: null,
+  };
+}
+
 function formatGeneric(
   raw: Record<string, unknown>,
   sourceType: string,
@@ -438,6 +491,8 @@ export function formatSource(
     case "blinkit_ocr":
     case "instamart_ocr":
       return formatScreenshotOcr(rawJson, sourceType);
+    case "manual_attachment":
+      return formatManualAttachment(rawJson);
     default:
       return formatGeneric(rawJson, sourceType);
   }

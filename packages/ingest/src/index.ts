@@ -25,6 +25,11 @@ export {
   type WriteZeptoInvoiceArgs,
   type ZeptoInvoiceOutcome,
 } from "./zepto-invoice";
+export {
+  writeForcedAttachment,
+  type ForcedAttachmentOutcome,
+  type WriteForcedAttachmentArgs,
+} from "./forced-attachment";
 export { linkAutopayPairs, type LinkAutopayPairsResult } from "./autopay-linker";
 export {
   backfillTimesFromHdfcAlerts,

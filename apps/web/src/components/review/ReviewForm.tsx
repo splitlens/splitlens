@@ -479,10 +479,14 @@ export function ReviewForm({
               if (r.ok) {
                 if (r.kind === "zepto_invoice") {
                   setSavedMsg(
-                    `Attached invoice ${r.orderNo} (${r.itemCount} item${r.itemCount === 1 ? "" : "s"}, ₹${r.amount})`,
+                    `Attached invoice ${r.orderNo} · ${r.itemCount} item${r.itemCount === 1 ? "" : "s"} · ₹${r.amount}`,
+                  );
+                } else if (r.kind === "ocr_attached") {
+                  setSavedMsg(
+                    `Attached ${r.merchant} receipt · ${r.itemCount} item${r.itemCount === 1 ? "" : "s"} · ₹${r.amount}`,
                   );
                 } else {
-                  setSavedMsg(`Queued — ${r.reason.split(" — ")[0]}`);
+                  setSavedMsg(`Attached ${r.fileName}`);
                 }
                 onAfterAttach();
               } else {
