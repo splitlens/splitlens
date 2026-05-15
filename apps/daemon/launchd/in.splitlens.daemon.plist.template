@@ -15,6 +15,10 @@
     @PHONEPE_PWD@    PhonePe statement PDF password
     @HDFC_PWD@       HDFC savings statement PDF password
     @HDFC_CC_PWD@    HDFC credit card statement PDF password
+    @GMAIL_USER_1@   primary Gmail address (the bills inbox)
+    @GMAIL_APP_PWD_1@ App Password from https://myaccount.google.com/apppasswords
+    @GMAIL_USER_2@   optional secondary Gmail address (blank if unused)
+    @GMAIL_APP_PWD_2@ App Password for the secondary account (blank if unused)
 -->
 <plist version="1.0">
 <dict>
@@ -44,6 +48,14 @@
         <string>@HDFC_PWD@</string>
         <key>HDFC_CC_PWD</key>
         <string>@HDFC_CC_PWD@</string>
+        <key>GMAIL_USER_1</key>
+        <string>@GMAIL_USER_1@</string>
+        <key>GMAIL_APP_PWD_1</key>
+        <string>@GMAIL_APP_PWD_1@</string>
+        <key>GMAIL_USER_2</key>
+        <string>@GMAIL_USER_2@</string>
+        <key>GMAIL_APP_PWD_2</key>
+        <string>@GMAIL_APP_PWD_2@</string>
     </dict>
 
     <key>RunAtLoad</key>

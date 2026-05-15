@@ -31,6 +31,20 @@ read -rsp "PhonePe PDF password: "    PHONEPE_PWD; echo
 read -rsp "HDFC savings PDF password: " HDFC_PWD; echo
 read -rsp "HDFC CC PDF password: "    HDFC_CC_PWD; echo
 
+echo
+echo "Email accounts for receipt enrichment (leave blank to skip)."
+echo "App Passwords: https://myaccount.google.com/apppasswords"
+read -rp  "Gmail account 1 address (or blank to skip): " GMAIL_USER_1
+GMAIL_APP_PWD_1=""
+if [[ -n "$GMAIL_USER_1" ]]; then
+  read -rsp "Gmail account 1 App Password: " GMAIL_APP_PWD_1; echo
+fi
+read -rp  "Gmail account 2 address (or blank to skip): " GMAIL_USER_2
+GMAIL_APP_PWD_2=""
+if [[ -n "$GMAIL_USER_2" ]]; then
+  read -rsp "Gmail account 2 App Password: " GMAIL_APP_PWD_2; echo
+fi
+
 mkdir -p "$TARGET_DIR" "$LOGS_DIR"
 
 # Bail out if launchd already has it loaded — uninstall first.
@@ -46,6 +60,10 @@ sed \
   -e "s|@PHONEPE_PWD@|$PHONEPE_PWD|g" \
   -e "s|@HDFC_PWD@|$HDFC_PWD|g" \
   -e "s|@HDFC_CC_PWD@|$HDFC_CC_PWD|g" \
+  -e "s|@GMAIL_USER_1@|$GMAIL_USER_1|g" \
+  -e "s|@GMAIL_APP_PWD_1@|$GMAIL_APP_PWD_1|g" \
+  -e "s|@GMAIL_USER_2@|$GMAIL_USER_2|g" \
+  -e "s|@GMAIL_APP_PWD_2@|$GMAIL_APP_PWD_2|g" \
   "$TEMPLATE" > "$TARGET"
 
 chmod 600 "$TARGET"   # plist contains passwords — lock down read access

@@ -20,6 +20,10 @@ export {
 } from "./hdfc-cc";
 export { linkAutopayPairs, type LinkAutopayPairsResult } from "./autopay-linker";
 export {
+  backfillTimesFromHdfcAlerts,
+  type TimeBackfillResult,
+} from "./email-backfill";
+export {
   dispatchFile,
   type DispatchOutcome,
   type DispatchOptions,

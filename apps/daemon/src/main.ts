@@ -24,6 +24,8 @@ import { basename } from "node:path";
 import chokidar from "chokidar";
 
 import { openDb, closeDb, defaultDbPath } from "@splitlens/db";
+import { loadEmailAccountsFromEnv } from "@splitlens/email-receipts";
+import { backfillTimesFromHdfcAlerts } from "@splitlens/ingest";
 
 import { resolveDaemonPaths, type DaemonPaths } from "./paths";
 import { processInboxFile } from "./process-file";
@@ -89,6 +91,11 @@ async function main() {
 
   watcher.on("error", (e) => log("watcher error", { error: String(e) }));
 
+  // Fire the email-driven time-backfill once at startup. Skips silently when
+  // no GMAIL_USER_* env vars are set. Runs after the watcher is up so it
+  // doesn't block file-add events; failures don't bring the daemon down.
+  void runEmailBackfillOnce(db);
+
   // Trap SIGTERM/SIGINT so launchd can stop us cleanly.
   let shuttingDown = false;
   const shutdown = async (signal: string) => {
@@ -103,6 +110,33 @@ async function main() {
   process.on("SIGINT", () => void shutdown("SIGINT"));
 
   log("watching for new files (Ctrl+C to stop)");
+}
+
+async function runEmailBackfillOnce(db: ReturnType<typeof openDb>) {
+  try {
+    const accounts = loadEmailAccountsFromEnv();
+    if (accounts.length === 0) {
+      log("email backfill skipped: no GMAIL_USER_N / GMAIL_APP_PWD_N env vars configured");
+      return;
+    }
+    log("email backfill starting", {
+      accounts: accounts.map((a) => a.user),
+    });
+    const t0 = Date.now();
+    const result = await backfillTimesFromHdfcAlerts(db, accounts, {
+      verbose: false,
+    });
+    const dt = Date.now() - t0;
+    log(`email backfill done in ${dt}ms`, {
+      candidates: result.candidates,
+      filled: result.filled,
+      perAccount: result.perAccount,
+    });
+  } catch (e) {
+    log("email backfill failed", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
 }
 
 main().catch((e) => {

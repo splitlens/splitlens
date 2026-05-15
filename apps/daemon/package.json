@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@splitlens/db": "workspace:*",
+    "@splitlens/email-receipts": "workspace:*",
     "@splitlens/ingest": "workspace:*",
     "chokidar": "^4.0.3"
   },

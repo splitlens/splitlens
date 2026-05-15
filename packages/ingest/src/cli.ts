@@ -14,14 +14,51 @@
  */
 import { basename } from "node:path";
 import { openDb, defaultDbPath } from "@splitlens/db";
+import { loadEmailAccountsFromEnv } from "@splitlens/email-receipts";
 
 import { dispatchFile } from "./dispatch";
+import { backfillTimesFromHdfcAlerts } from "./email-backfill";
 
 async function main() {
   const args = process.argv.slice(2);
   if (args.length === 0) {
-    console.error("usage: splitlens-ingest <file.pdf> [more.pdf ...]");
+    console.error(
+      "usage:\n" +
+        "  splitlens-ingest <file.pdf> [more.pdf ...]   # ingest statement PDFs\n" +
+        "  splitlens-ingest backfill-times              # fill txn_time from HDFC alert emails",
+    );
     process.exit(2);
+  }
+
+  // Subcommand: backfill-times — uses HDFC InstaAlerts emails to fill in
+  // wall-clock time for canonical txns where txn_time IS NULL.
+  if (args[0] === "backfill-times") {
+    const dbPath = process.env.SPLITLENS_DB_PATH ?? defaultDbPath();
+    console.log(`[ingest] db: ${dbPath}`);
+    const db = openDb(dbPath);
+    const accounts = loadEmailAccountsFromEnv();
+    if (accounts.length === 0) {
+      console.error(
+        "[ingest] no email accounts configured. Set GMAIL_USER_1 / GMAIL_APP_PWD_1 " +
+          "(and optionally _2 / _3 / _4) in env or in the daemon's launchd plist.",
+      );
+      process.exit(2);
+    }
+    console.log(
+      `[ingest] backfilling times from ${accounts.length} email account(s): ` +
+        accounts.map((a) => a.user).join(", "),
+    );
+    const result = await backfillTimesFromHdfcAlerts(db, accounts, {
+      verbose: true,
+    });
+    console.log("\n[ingest] backfill summary:");
+    console.log(`  candidates:   ${result.candidates}`);
+    console.log(`  filled:       ${result.filled}`);
+    console.log("  per account:");
+    for (const a of result.perAccount) {
+      console.log(`    ${a.user}: ${a.alertsFetched} alerts fetched, ${a.matched} unique UTRs`);
+    }
+    process.exit(0);
   }
 
   const dbPath = process.env.SPLITLENS_DB_PATH ?? defaultDbPath();

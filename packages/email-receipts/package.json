@@ -1,9 +1,9 @@
 {
-  "name": "@splitlens/ingest",
+  "name": "@splitlens/email-receipts",
   "version": "0.0.1",
   "private": true,
   "license": "AGPL-3.0-only",
-  "description": "Node-side ingestion: takes a statement file, parses it with @splitlens/core, writes canonical rows into @splitlens/db. Used by the daemon and the splitlens-ingest CLI.",
+  "description": "Local-first email receipt fetcher. Connects to Gmail (or any IMAP) with an App Password, pulls allowlisted merchant emails, and exposes them to the ingestion pipeline for per-merchant parsing. No third-party servers; nothing leaves the device.",
   "type": "module",
   "main": "./src/index.ts",
   "module": "./src/index.ts",
@@ -14,27 +14,24 @@
       "import": "./src/index.ts"
     }
   },
-  "bin": {
-    "splitlens-ingest": "./src/cli.ts"
-  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch",
     "test": "vitest run",
-    "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "clean": "rm -rf dist .turbo",
-    "ingest": "tsx src/cli.ts"
+    "spike-fetch": "tsx scripts/spike-fetch.ts",
+    "spike-find": "tsx scripts/spike-find-emails.ts"
   },
   "dependencies": {
-    "@splitlens/core": "workspace:*",
     "@splitlens/db": "workspace:*",
-    "@splitlens/email-receipts": "workspace:*",
     "drizzle-orm": "^0.38.4",
-    "pdfjs-dist": "^4.10.38"
+    "imapflow": "^1.0.190",
+    "mailparser": "^3.7.2"
   },
   "devDependencies": {
     "@splitlens/tsconfig": "workspace:*",
+    "@types/mailparser": "^3.4.5",
     "@types/node": "^22.10.0",
     "tsx": "^4.22.0",
     "typescript": "^5.7.3",
