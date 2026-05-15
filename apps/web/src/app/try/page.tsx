@@ -13,48 +13,86 @@ type Result =
   | { kind: "savings"; data: ParseResult; fileName: string }
   | { kind: "cc"; data: CcParseResult; fileName: string };
 
+/**
+ * Detect a pdfjs PasswordException reliably. pdfjs throws an object with
+ * `name === "PasswordException"` and a `code` (1=NEED, 2=INCORRECT). The
+ * .message also contains "password", but the name check is more robust.
+ */
+function isPasswordError(err: unknown): "missing" | "wrong" | null {
+  if (!err || typeof err !== "object") return null;
+  const e = err as { name?: string; code?: number; message?: string };
+  if (e.name === "PasswordException") {
+    return e.code === 2 ? "wrong" : "missing";
+  }
+  const m = String(e.message ?? "");
+  if (/incorrect.*password|wrong.*password/i.test(m)) return "wrong";
+  if (/no.*password|password.*required|password-protected/i.test(m)) return "missing";
+  return null;
+}
+
 export default function TryPage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [password, setPassword] = useState("");
+  /** Last dropped file — kept so the user can retry after entering a password. */
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
 
-  async function handleFile(file: File) {
+  async function parseFile(file: File, pwd: string) {
     setIsProcessing(true);
     setErrorMsg(null);
     setResult(null);
     try {
       const buf = new Uint8Array(await file.arrayBuffer());
-
-      // Auto-detect: filename pattern hints at credit-card vs savings statement.
-      // HDFC CC statements are named like "Apr2026_Billedstatements_3969_*.pdf".
-      // HDFC savings statements are named "Acct_Statement_XXXXXXXX2491_*.pdf".
       const isCc = /Billedstatements|_\d{4}_/.test(file.name);
+
+      // Always-on console log so the user can paste back the parser path
+      console.log(
+        `[SplitLens] Parsing ${file.name} as ${isCc ? "CC" : "Savings"} (size=${buf.length} bytes, password=${pwd ? "yes" : "no"})`,
+      );
 
       if (isCc) {
         const data = await parseHdfcCc(buf, {
-          password: password || undefined,
+          password: pwd || undefined,
           extractTextPages,
         });
         setResult({ kind: "cc", data, fileName: file.name });
       } else {
         const data = await parseHdfcSavings(buf, {
-          password: password || undefined,
+          password: pwd || undefined,
           extractPages: extractPagesPositional,
         });
         setResult({ kind: "savings", data, fileName: file.name });
       }
+      // Success — clear the pending file
+      setPendingFile(null);
     } catch (err: unknown) {
-      const msg =
-        err instanceof Error
-          ? err.message.includes("password") || err.message.includes("Password")
-            ? "PDF is password-protected — enter the password and try again."
-            : err.message
-          : String(err);
-      setErrorMsg(msg);
+      const pwState = isPasswordError(err);
+      if (pwState === "missing") {
+        setErrorMsg("This PDF needs a password. Enter it below and click 'Parse'.");
+      } else if (pwState === "wrong") {
+        setErrorMsg("Wrong password. Try again.");
+      } else {
+        const msg = err instanceof Error ? err.message : String(err);
+        setErrorMsg(msg);
+      }
+      // Keep pendingFile so the retry button works
     } finally {
       setIsProcessing(false);
     }
+  }
+
+  function handleFile(file: File) {
+    setPendingFile(file);
+    // Enable verbose pdfjs diagnostics so we can debug coordinate mismatches
+    if (typeof window !== "undefined") {
+      (window as unknown as { SPLITLENS_DEBUG_PDF?: boolean }).SPLITLENS_DEBUG_PDF = true;
+    }
+    return parseFile(file, password);
+  }
+
+  function retry() {
+    if (pendingFile) void parseFile(pendingFile, password);
   }
 
   return (
@@ -77,20 +115,43 @@ export default function TryPage() {
         <PdfDropzone onFile={handleFile} isProcessing={isProcessing} />
       </section>
 
-      <section className="mb-10 grid gap-3 sm:grid-cols-[1fr_auto]">
-        <div>
-          <label htmlFor="pwd" className="mb-1 block text-sm text-[color:var(--color-muted)]">
-            PDF password (if any)
-          </label>
+      <section className="mb-6">
+        <label htmlFor="pwd" className="mb-1 block text-sm text-[color:var(--color-muted)]">
+          PDF password (if any)
+        </label>
+        <div className="flex gap-3">
           <input
             id="pwd"
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && pendingFile && !isProcessing) {
+                e.preventDefault();
+                retry();
+              }
+            }}
             placeholder="HDFC default: first 4 chars of name + DDMM of birth"
-            className="w-full rounded-md border border-[color:var(--color-border)] bg-[color:var(--color-card)] px-3 py-2 text-sm focus:border-[color:var(--color-accent)] focus:outline-none"
+            className="flex-1 rounded-md border border-[color:var(--color-border)] bg-[color:var(--color-card)] px-3 py-2 text-sm focus:border-[color:var(--color-accent)] focus:outline-none"
+            disabled={isProcessing}
           />
+          {pendingFile && (
+            <button
+              type="button"
+              onClick={retry}
+              disabled={isProcessing}
+              className="rounded-md bg-[color:var(--color-accent)] px-5 py-2 text-sm font-semibold text-[color:var(--color-accent-fg)] disabled:opacity-50"
+            >
+              {isProcessing ? "Parsing…" : "Parse"}
+            </button>
+          )}
         </div>
+        {pendingFile && !errorMsg && !result && (
+          <p className="mt-2 text-xs text-[color:var(--color-muted)]">
+            File ready: <strong>{pendingFile.name}</strong> — enter the password and press Enter (or
+            click Parse).
+          </p>
+        )}
       </section>
 
       {errorMsg && (
@@ -99,6 +160,9 @@ export default function TryPage() {
           className="border-[color:var(--color-danger)]/40 bg-[color:var(--color-danger)]/10 mb-6 rounded-md border px-4 py-3 text-sm text-[color:var(--color-danger)]"
         >
           ⚠️ {errorMsg}
+          {pendingFile && (
+            <span className="ml-2 text-[color:var(--color-muted)]">({pendingFile.name})</span>
+          )}
         </div>
       )}
 

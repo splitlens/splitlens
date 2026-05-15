@@ -31,6 +31,11 @@ async function getPdfjs(): Promise<PdfjsModule> {
 /**
  * Extract positional words from each page. Used by the HDFC savings parser
  * to disambiguate the Withdrawal vs Deposit columns.
+ *
+ * pdfjs returns "TextItems" — atomic text fragments at given positions. These
+ * may contain multiple whitespace-separated words. We split each item on
+ * whitespace and apportion the bounding box proportionally so each emitted
+ * PdfWord has an approximate x range matching what pdfplumber would produce.
  */
 export async function extractPagesPositional(
   pdf: Uint8Array,
@@ -45,19 +50,21 @@ export async function extractPagesPositional(
     const viewport = page.getViewport({ scale: 1.0 });
     const textContent = await page.getTextContent();
 
+    // Each pdfjs TextItem corresponds to a contiguous text fragment as drawn
+    // by the PDF. HDFC emits each "word" as a separate item (with whitespace-
+    // only items between them as kerning), so we treat each non-empty item as
+    // one PdfWord, preserving any internal spaces. This matches what the
+    // positional parser expects (header text like "Value Dt" with the space).
     const words: PdfWord[] = [];
     for (const item of textContent.items) {
-      // PDF.js TextItem has `str`, `transform` (matrix), `width`, `height`
-      if (!("str" in item) || !item.str) continue;
-      if (typeof item.str !== "string" || item.str.trim() === "") continue;
-
-      // Transform[5] is the y-coordinate in PDF space (origin bottom-left).
-      // Convert to top-down origin to match pdfplumber convention.
+      if (!("str" in item) || typeof item.str !== "string") continue;
+      const text = item.str.trim();
+      if (text === "") continue;
       const x0 = item.transform[4];
-      const yPdf = item.transform[5]; // PDF y from bottom
+      const yPdf = item.transform[5];
       const top = viewport.height - yPdf - item.height;
       words.push({
-        text: item.str,
+        text,
         x0,
         x1: x0 + item.width,
         top,
@@ -72,6 +79,35 @@ export async function extractPagesPositional(
       words,
     });
   }
+
+  // Dev-mode diagnostic: log a sample of page-1 words so we can debug coordinate
+  // mismatches in the browser. Toggleable via window.SPLITLENS_DEBUG_PDF=true.
+  if (
+    typeof window !== "undefined" &&
+    (window as unknown as { SPLITLENS_DEBUG_PDF?: boolean }).SPLITLENS_DEBUG_PDF
+  ) {
+    const p1 = pages[0];
+    if (p1) {
+      console.log("[SplitLens] Page 1 dimensions:", { width: p1.width, height: p1.height });
+      console.log("[SplitLens] First 50 words from page 1:");
+      console.table(p1.words.slice(0, 50));
+      // Header detection check
+      const headerKeys = [
+        "Date",
+        "Narration",
+        "Chq./Ref.No.",
+        "ValueDt",
+        "WithdrawalAmt.",
+        "DepositAmt.",
+        "ClosingBalance",
+      ];
+      for (const k of headerKeys) {
+        const found = p1.words.find((w) => w.text === k);
+        console.log(`[SplitLens] Header word '${k}':`, found ?? "❌ NOT FOUND");
+      }
+    }
+  }
+
   return pages;
 }
 

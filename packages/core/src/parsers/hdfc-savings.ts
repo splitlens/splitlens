@@ -29,21 +29,34 @@ const FOOTER_Y_CUTOFF = 770;
 /** DD/MM/YY transaction date pattern (HDFC short-date format). */
 const DATE_RE = /^\d{2}\/\d{2}\/\d{2}$/;
 
-/** Period header "StatementFrom : DD/MM/YYYY ... To : DD/MM/YYYY". */
-const PERIOD_RE = /StatementFrom\s*:\s*(\d{2}\/\d{2}\/\d{4}).*?To\s*:\s*(\d{2}\/\d{2}\/\d{4})/;
+/**
+ * Period header — accepts both no-space ("StatementFrom") and spaced ("Statement From")
+ * forms because pdfplumber and pdfjs render text differently.
+ */
+const PERIOD_RE = /Statement\s*From\s*:\s*(\d{2}\/\d{2}\/\d{4}).*?To\s*:\s*(\d{2}\/\d{2}\/\d{4})/;
+const ACCT_NO_RE = /Account\s*No\s*:\s*(\d+)/;
+const NAME_RE = /^MR\.?\s+([A-Z][A-Z ]+?)\s*$/m;
 
-const ACCT_NO_RE = /AccountNo\s*:\s*(\d+)/;
-const NAME_RE = /^MR\.?\s+([A-Z][A-Z ]+)$/m;
-
+// HDFC's PDF actually renders these with internal spaces ("Value Dt", etc.).
+// pdfplumber in Python glued them together (no spaces) — pdfjs preserves them.
+// We accept the spaced form as canonical; any caller producing the no-space
+// variant should normalize first, or we can fall back to no-space below.
 const HEADER_KEYS = [
   "Date",
   "Narration",
   "Chq./Ref.No.",
-  "ValueDt",
-  "WithdrawalAmt.",
-  "DepositAmt.",
-  "ClosingBalance",
+  "Value Dt",
+  "Withdrawal Amt.",
+  "Deposit Amt.",
+  "Closing Balance",
 ] as const;
+// Aliases (no-space form, kept for backward compatibility with old fixtures)
+const HEADER_ALIASES: Record<string, string> = {
+  ValueDt: "Value Dt",
+  "WithdrawalAmt.": "Withdrawal Amt.",
+  "DepositAmt.": "Deposit Amt.",
+  ClosingBalance: "Closing Balance",
+};
 
 type ColumnKey = "date" | "narration" | "ref" | "value_date" | "withdrawal" | "deposit" | "balance";
 type ColumnRanges = Record<ColumnKey, [number, number]>;
@@ -179,12 +192,15 @@ export function findHeaderColumns(lines: PdfWord[][]): ColumnRanges | null {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
-    const texts = new Set(line.map((w) => w.text));
+    // Normalize each word to canonical (spaced) form via the alias map
+    const normalize = (t: string): string => HEADER_ALIASES[t] ?? t;
+    const texts = new Set(line.map((w) => normalize(w.text)));
     if (HEADER_KEYS.every((k) => texts.has(k))) {
       headerIdx = i;
       headerPos = {};
       for (const w of line) {
-        headerPos[w.text] = [w.x0, w.x1];
+        const canonical = normalize(w.text);
+        headerPos[canonical] = [w.x0, w.x1];
       }
       break;
     }
@@ -209,10 +225,10 @@ export function findHeaderColumns(lines: PdfWord[][]): ColumnRanges | null {
   const order: (keyof typeof headerPos)[] = [
     "Narration",
     "Chq./Ref.No.",
-    "ValueDt",
-    "WithdrawalAmt.",
-    "DepositAmt.",
-    "ClosingBalance",
+    "Value Dt",
+    "Withdrawal Amt.",
+    "Deposit Amt.",
+    "Closing Balance",
   ];
   const boundaries: number[] = [0, narrationLeft];
   for (let i = 0; i < order.length - 1; i++) {
@@ -220,7 +236,7 @@ export function findHeaderColumns(lines: PdfWord[][]): ColumnRanges | null {
     const nextX0 = headerPos[order[i + 1]!]![0];
     boundaries.push((curX1 + nextX0) / 2);
   }
-  boundaries.push(headerPos["ClosingBalance"]![1] + 100);
+  boundaries.push(headerPos["Closing Balance"]![1] + 100);
 
   const ranges = {} as ColumnRanges;
   for (let i = 0; i < COLUMN_KEYS.length; i++) {
