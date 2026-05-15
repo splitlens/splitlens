@@ -34,12 +34,18 @@ importers:
 
   apps/web:
     dependencies:
+      "@electric-sql/pglite":
+        specifier: ^0.4.5
+        version: 0.4.5
       "@splitlens/core":
         specifier: workspace:*
         version: link:../../packages/core
       "@splitlens/db":
         specifier: workspace:*
         version: link:../../packages/db
+      drizzle-orm:
+        specifier: ^0.38.4
+        version: 0.38.4(@electric-sql/pglite@0.4.5)(@types/react@19.2.14)(react@19.2.6)
       next:
         specifier: ^15.1.4
         version: 15.5.18(@playwright/test@1.60.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
@@ -118,7 +124,7 @@ importers:
     dependencies:
       drizzle-orm:
         specifier: ^0.38.3
-        version: 0.38.4(@types/react@19.2.14)(react@19.2.6)
+        version: 0.38.4(@electric-sql/pglite@0.4.5)(@types/react@19.2.14)(react@19.2.6)
     devDependencies:
       "@splitlens/tsconfig":
         specifier: workspace:*
@@ -186,6 +192,12 @@ packages:
     resolution:
       {
         integrity: sha512-z33Il7l5dKjUgGULTqBsQBQwckHh5AbIuxhdsIxDDiZAzBOrZO6q9ogcWC65kU382AfynTfgNumVcNIjuIua6w==,
+      }
+
+  "@electric-sql/pglite@0.4.5":
+    resolution:
+      {
+        integrity: sha512-aGG2zGEyZzGWKy8P+9ZoNUV0jxt1+hgbeTf+bVAYyxVZZLXg3/9aFlfLxb08AYZVAfAkQlQIysmWjhc5hwDG8g==,
       }
 
   "@emnapi/core@1.10.0":
@@ -5552,6 +5564,8 @@ snapshots:
 
   "@drizzle-team/brocli@0.10.2": {}
 
+  "@electric-sql/pglite@0.4.5": {}
+
   "@emnapi/core@1.10.0":
     dependencies:
       "@emnapi/wasi-threads": 1.2.1
@@ -6845,8 +6859,9 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  drizzle-orm@0.38.4(@types/react@19.2.14)(react@19.2.6):
+  drizzle-orm@0.38.4(@electric-sql/pglite@0.4.5)(@types/react@19.2.14)(react@19.2.6):
     optionalDependencies:
+      "@electric-sql/pglite": 0.4.5
       "@types/react": 19.2.14
       react: 19.2.6
 

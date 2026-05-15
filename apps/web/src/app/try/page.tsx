@@ -8,10 +8,11 @@ import { extractPagesPositional, extractTextPages } from "@/lib/pdf-extract";
 import { PdfDropzone } from "@/components/PdfDropzone";
 import { TransactionTable } from "@/components/TransactionTable";
 import { fmtInr, fmtInrExact } from "@/lib/format";
+import { saveSavingsResult, saveCcResult, type SaveResult } from "@/lib/repo";
 
 type Result =
-  | { kind: "savings"; data: ParseResult; fileName: string }
-  | { kind: "cc"; data: CcParseResult; fileName: string };
+  | { kind: "savings"; data: ParseResult; fileName: string; save?: SaveResult }
+  | { kind: "cc"; data: CcParseResult; fileName: string; save?: SaveResult };
 
 /**
  * Detect a pdfjs PasswordException reliably. pdfjs throws an object with
@@ -56,13 +57,21 @@ export default function TryPage() {
           password: pwd || undefined,
           extractTextPages,
         });
-        setResult({ kind: "cc", data, fileName: file.name });
+        let save: SaveResult | undefined;
+        if (data.statement) {
+          save = await saveCcResult(file.name, data.statement, data.transactions);
+        }
+        setResult({ kind: "cc", data, fileName: file.name, save });
       } else {
         const data = await parseHdfcSavings(buf, {
           password: pwd || undefined,
           extractPages: extractPagesPositional,
         });
-        setResult({ kind: "savings", data, fileName: file.name });
+        let save: SaveResult | undefined;
+        if (data.statement) {
+          save = await saveSavingsResult(file.name, data.statement, data.transactions);
+        }
+        setResult({ kind: "savings", data, fileName: file.name, save });
       }
       // Success — clear the pending file
       setPendingFile(null);
@@ -171,6 +180,22 @@ export default function TryPage() {
   );
 }
 
+function SavedBanner({ save }: { save: SaveResult | undefined }) {
+  if (!save) return null;
+  const isReimport = save.skipped > 0 && save.inserted === 0;
+  return (
+    <div className="border-[color:var(--color-success)]/40 bg-[color:var(--color-success)]/10 rounded-md border px-4 py-3 text-sm text-[color:var(--color-success)]">
+      💾{" "}
+      {isReimport
+        ? `Already saved earlier — ${save.skipped} transactions in your local DB.`
+        : `Saved ${save.inserted} new transactions to your local browser DB.`}{" "}
+      <Link href="/dashboard" className="underline hover:opacity-80">
+        Open dashboard →
+      </Link>
+    </div>
+  );
+}
+
 function ResultView({ result }: { result: Result }) {
   if (result.kind === "savings") {
     const { statement, transactions } = result.data;
@@ -178,6 +203,7 @@ function ResultView({ result }: { result: Result }) {
     const totalIn = transactions.reduce((s, t) => s + (t.deposit ?? 0), 0);
     return (
       <section className="space-y-6">
+        <SavedBanner save={result.save} />
         <header className="rounded-xl border border-[color:var(--color-border)] bg-[color:var(--color-card)] p-6">
           <div className="text-sm text-[color:var(--color-muted)]">{result.fileName}</div>
           <h2 className="mt-1 text-2xl font-bold">
@@ -217,6 +243,7 @@ function ResultView({ result }: { result: Result }) {
 
   return (
     <section className="space-y-6">
+      <SavedBanner save={result.save} />
       <header className="rounded-xl border border-[color:var(--color-border)] bg-[color:var(--color-card)] p-6">
         <div className="text-sm text-[color:var(--color-muted)]">{result.fileName}</div>
         <h2 className="mt-1 text-2xl font-bold">

@@ -7,7 +7,7 @@ export interface RowLike {
   narration: string;
   withdrawal?: number | null;
   deposit?: number | null;
-  closingBalance?: number;
+  closingBalance?: number | null;
 }
 
 export function TransactionTable({ rows, max = 50 }: { rows: RowLike[]; max?: number }) {
@@ -51,7 +51,7 @@ export function TransactionTable({ rows, max = 50 }: { rows: RowLike[]; max?: nu
                   {row.deposit ? fmtInr(row.deposit) : ""}
                 </td>
                 <td className="whitespace-nowrap px-4 py-2 text-right font-mono text-[color:var(--color-muted)]">
-                  {row.closingBalance !== undefined ? fmtInr(row.closingBalance) : ""}
+                  {row.closingBalance != null ? fmtInr(row.closingBalance) : ""}
                 </td>
               </tr>
             ))}
