@@ -12,6 +12,7 @@
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle, type PgliteDatabase } from "drizzle-orm/pglite";
 
+let pgliteInstance: PGlite | null = null;
 let dbPromise: Promise<PgliteDatabase> | null = null;
 
 const SCHEMA_DDL = `
@@ -97,29 +98,34 @@ CREATE INDEX IF NOT EXISTS idx_rule_priority ON rules(priority);
 export async function getDb() {
   if (!dbPromise) {
     dbPromise = (async () => {
-      // OPFS-backed persistence. Falls back to in-memory if OPFS unavailable.
-      // Path is opaque to the user; just an internal handle.
-      const pglite = await PGlite.create({
+      // IndexedDB-backed persistence. Falls back to in-memory if unavailable.
+      pgliteInstance = await PGlite.create({
         dataDir: "idb://splitlens",
       });
       // Apply schema (idempotent — IF NOT EXISTS everywhere)
-      await pglite.exec(SCHEMA_DDL);
-      return drizzle(pglite);
+      await pgliteInstance.exec(SCHEMA_DDL);
+      return drizzle(pgliteInstance);
     })();
   }
   return dbPromise;
 }
 
-/** Reset the DB (drops all tables). Used by Settings → "Delete all data". */
+/** Reset the DB (drops all tables, recreates schema). Wired to dashboard's
+ * "Reset all data" button. Uses PGlite's native exec() for multi-statement DDL
+ * (drizzle's db.execute expects a sql`` template tag, not a raw string). */
 export async function resetDb() {
-  const db = await getDb();
-  await db.execute(`
+  await getDb(); // ensure init
+  if (!pgliteInstance) throw new Error("PGlite not initialized");
+
+  console.log("[SplitLens] resetDb: dropping tables…");
+  await pgliteInstance.exec(`
     DROP TABLE IF EXISTS transactions CASCADE;
     DROP TABLE IF EXISTS statements CASCADE;
     DROP TABLE IF EXISTS people CASCADE;
     DROP TABLE IF EXISTS rules CASCADE;
     DROP TABLE IF EXISTS accounts CASCADE;
   `);
-  // Re-apply schema
-  await db.execute(SCHEMA_DDL);
+  console.log("[SplitLens] resetDb: re-applying schema…");
+  await pgliteInstance.exec(SCHEMA_DDL);
+  console.log("[SplitLens] resetDb: done");
 }
