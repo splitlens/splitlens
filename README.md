@@ -14,10 +14,11 @@ Drop your bank PDF statements into SplitLens. It parses them, categorizes every 
 
 **Differentiator:** every other personal finance app in India (Cred, Jupiter, Fi, Niyo, INDmoney) sends your bank data to their servers. SplitLens sends nothing, anywhere. No backend, no aggregator, no compliance risk. **Code is open source so you can verify this for yourself.**
 
-## Quick links
+## Docs
 
+- **[Implementation overview](docs/impl/README.md)** — what's actually built. Start here if you're contributing code.
+- [Docs index](docs/README.md) — full navigation (planning + implementation)
 - [Product Requirements](docs/PRD.md) — vision, audience, MVP scope
-- [Architecture](docs/ARCHITECTURE.md) — tech stack + decisions
 - [Roadmap](docs/ROADMAP.md) — Phase 1 week-by-week
 - [Testing strategy](docs/TESTING.md) — TDD where it matters
 - [ADRs](docs/adr/) — architecture decision records
