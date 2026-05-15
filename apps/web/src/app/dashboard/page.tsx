@@ -8,13 +8,19 @@ import {
   getRecentTransactions,
   getSpendByCategory,
   getPeopleSummary,
+  getMonthlySpend,
+  getCategorySpendByMonth,
   type DashboardSummary,
   type AccountSummary,
   type CategorySummary,
   type PeopleSummary,
+  type MonthlyBucket,
+  type CategoryByMonth,
 } from "@/lib/repo";
 import { resetDb } from "@/lib/db";
 import { TransactionTable, CategoryPill, PersonChip } from "@/components/TransactionTable";
+import { SpendSunburst } from "@/components/SpendSunburst";
+import { MonthlyReport } from "@/components/MonthlyReport";
 import { fmtInr, fmtInrExact } from "@/lib/format";
 
 interface State {
@@ -31,6 +37,8 @@ interface State {
   }>;
   categories: CategorySummary[];
   people: PeopleSummary[];
+  monthly: MonthlyBucket[];
+  monthlyByGroup: CategoryByMonth[];
   loading: boolean;
   error: string | null;
 }
@@ -42,6 +50,8 @@ export default function DashboardPage() {
     recent: [],
     categories: [],
     people: [],
+    monthly: [],
+    monthlyByGroup: [],
     loading: true,
     error: null,
   });
@@ -52,13 +62,16 @@ export default function DashboardPage() {
     let cancelled = false;
     (async () => {
       try {
-        const [summary, accounts, recent, categories, people] = await Promise.all([
-          getDashboardSummary(),
-          getAccountsWithSummary(),
-          getRecentTransactions(100),
-          getSpendByCategory({ excludeNonSpend: true }),
-          getPeopleSummary(),
-        ]);
+        const [summary, accounts, recent, categories, people, monthly, monthlyByGroup] =
+          await Promise.all([
+            getDashboardSummary(),
+            getAccountsWithSummary(),
+            getRecentTransactions(100),
+            getSpendByCategory({ excludeNonSpend: true }),
+            getPeopleSummary(),
+            getMonthlySpend(),
+            getCategorySpendByMonth(),
+          ]);
         if (cancelled) return;
         setState({
           summary,
@@ -74,6 +87,8 @@ export default function DashboardPage() {
           })),
           categories,
           people,
+          monthly,
+          monthlyByGroup,
           loading: false,
           error: null,
         });
@@ -226,6 +241,10 @@ export default function DashboardPage() {
               </table>
             </div>
           </section>
+
+          <MonthlyReport buckets={state.monthly} byGroup={state.monthlyByGroup} />
+
+          <SpendSunburst categories={state.categories} />
 
           <TopPeople people={state.people} />
 

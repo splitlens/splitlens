@@ -333,6 +333,89 @@ export async function getPeopleSummary(): Promise<PeopleSummary[]> {
   });
 }
 
+export interface MonthlyBucket {
+  /** YYYY-MM */
+  month: string;
+  txnCount: number;
+  totalOut: number;
+  totalIn: number;
+  /** net = totalIn - totalOut. Positive = saved, negative = bled. */
+  net: number;
+}
+
+/**
+ * Per-month totals for the trend chart. Excludes Investment + Transfer (same
+ * "real spend" definition as getSpendByCategory). Ordered oldest → newest.
+ */
+export async function getMonthlySpend(): Promise<MonthlyBucket[]> {
+  const db = await getDb();
+  const result = await db.execute<{
+    month: string;
+    txn_count: number;
+    total_out: number;
+    total_in: number;
+  }>(sql`
+    SELECT
+      SUBSTRING(txn_date FROM 1 FOR 7) AS month,
+      COUNT(*)::int                       AS txn_count,
+      COALESCE(SUM(withdrawal), 0)::real  AS total_out,
+      COALESCE(SUM(deposit), 0)::real     AS total_in
+    FROM transactions
+    WHERE COALESCE(category, 'Uncategorized') NOT LIKE 'Investment:%'
+      AND COALESCE(category, 'Uncategorized') NOT LIKE 'Transfer:%'
+    GROUP BY SUBSTRING(txn_date FROM 1 FOR 7)
+    ORDER BY month ASC
+  `);
+  return (result.rows ?? []).map((r) => {
+    const totalOut = Number(r.total_out);
+    const totalIn = Number(r.total_in);
+    return {
+      month: r.month,
+      txnCount: r.txn_count,
+      totalOut,
+      totalIn,
+      net: totalIn - totalOut,
+    };
+  });
+}
+
+export interface CategoryByMonth {
+  /** YYYY-MM */
+  month: string;
+  /** Top-level group ("Bills", "Food", …) */
+  group: string;
+  totalOut: number;
+}
+
+/**
+ * Group-level spend pivoted by month. Powers the stacked-bar / heatmap view
+ * in the monthly report.
+ */
+export async function getCategorySpendByMonth(): Promise<CategoryByMonth[]> {
+  const db = await getDb();
+  const result = await db.execute<{
+    month: string;
+    grp: string;
+    total_out: number;
+  }>(sql`
+    SELECT
+      SUBSTRING(txn_date FROM 1 FOR 7) AS month,
+      SPLIT_PART(COALESCE(category, 'Uncategorized'), ':', 1) AS grp,
+      COALESCE(SUM(withdrawal), 0)::real AS total_out
+    FROM transactions
+    WHERE COALESCE(category, 'Uncategorized') NOT LIKE 'Investment:%'
+      AND COALESCE(category, 'Uncategorized') NOT LIKE 'Transfer:%'
+      AND withdrawal IS NOT NULL AND withdrawal > 0
+    GROUP BY month, grp
+    ORDER BY month ASC, total_out DESC
+  `);
+  return (result.rows ?? []).map((r) => ({
+    month: r.month,
+    group: r.grp,
+    totalOut: Number(r.total_out),
+  }));
+}
+
 export interface RecentTxn {
   txnDate: string;
   narration: string;

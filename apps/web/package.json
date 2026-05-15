@@ -19,6 +19,8 @@
     "@splitlens/core": "workspace:*",
     "@splitlens/db": "workspace:*",
     "drizzle-orm": "^0.38.4",
+    "echarts": "^6.0.0",
+    "echarts-for-react": "^3.0.6",
     "next": "^15.1.4",
     "pdfjs-dist": "^4.10.38",
     "react": "^19.0.0",
