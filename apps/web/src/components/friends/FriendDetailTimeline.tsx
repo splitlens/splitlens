@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import type {
   DrillDownTxn,
   FriendOverviewRow,
+  ItemEnrichment,
 } from "@/lib/repo";
 import { fmtInr, fmtDate } from "@/lib/format";
 import { ShareTxnModal, type PersonOption } from "./ShareTxnModal";
@@ -127,6 +128,9 @@ export function FriendDetailTimeline({
                         </span>
                       )}
                     </div>
+                    {r.txn.items && r.txn.items.items.length > 0 && (
+                      <ItemList items={r.txn.items} />
+                    )}
                   </div>
                 </div>
                 <RowAmount row={r} personDisplayName={person.displayName} />
@@ -178,6 +182,44 @@ function RowTypePill({ row, personDisplayName }: { row: Row; personDisplayName: 
     <span className="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300">
       Shared
     </span>
+  );
+}
+
+/**
+ * Inline item-level breakdown for Swiggy / Zomato shared / direct rows.
+ * Mirrors the dashboard's DayDetailModal styling so the same visual lives
+ * in both surfaces.
+ */
+function ItemList({ items }: { items: ItemEnrichment }) {
+  const MAX = 5;
+  const head = items.items.slice(0, MAX);
+  const extra = items.items.length - head.length;
+  const iconForKind = (kind: string): string => {
+    if (kind === "instamart") return "🛒";
+    if (kind === "zomato_dining") return "🍽️";
+    if (kind === "zomato_delivery") return "🛵";
+    return "🍔";
+  };
+  return (
+    <div className="mt-1 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-xs text-zinc-600 dark:text-zinc-400">
+      <span className="text-[11px]">{iconForKind(items.kind)}</span>
+      {items.restaurant && (
+        <span className="font-medium text-zinc-700 dark:text-zinc-300">
+          {items.restaurant.split(",")[0]}
+        </span>
+      )}
+      {head.map((it, i) => (
+        <span key={`${it.name}-${i}`} className="whitespace-nowrap">
+          {i === 0 && !items.restaurant ? "" : "·"} {it.name}
+          {it.qty > 1 ? ` ×${it.qty}` : ""}
+        </span>
+      ))}
+      {extra > 0 && (
+        <span className="italic text-zinc-500 dark:text-zinc-500">
+          + {extra} more
+        </span>
+      )}
+    </div>
   );
 }
 

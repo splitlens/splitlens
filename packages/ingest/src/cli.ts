@@ -17,7 +17,10 @@ import { openDb, defaultDbPath } from "@splitlens/db";
 import { loadEmailAccountsFromEnv } from "@splitlens/email-receipts";
 
 import { dispatchFile } from "./dispatch";
-import { backfillTimesFromHdfcAlerts } from "./email-backfill";
+import {
+  backfillSwiggyZomatoItems,
+  backfillTimesFromHdfcAlerts,
+} from "./email-backfill";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -25,7 +28,8 @@ async function main() {
     console.error(
       "usage:\n" +
         "  splitlens-ingest <file.pdf> [more.pdf ...]   # ingest statement PDFs\n" +
-        "  splitlens-ingest backfill-times              # fill txn_time from HDFC alert emails",
+        "  splitlens-ingest backfill-times              # fill txn_time from HDFC alert emails\n" +
+        "  splitlens-ingest enrich-items                # attach Swiggy/Zomato item lists from emails",
     );
     process.exit(2);
   }
@@ -57,6 +61,41 @@ async function main() {
     console.log("  per account:");
     for (const a of result.perAccount) {
       console.log(`    ${a.user}: ${a.alertsFetched} alerts fetched, ${a.matched} unique UTRs`);
+    }
+    process.exit(0);
+  }
+
+  // Subcommand: enrich-items — pull Swiggy + Zomato receipt emails and
+  // attach item-level breakdowns to matching canonical txns.
+  if (args[0] === "enrich-items") {
+    const dbPath = process.env.SPLITLENS_DB_PATH ?? defaultDbPath();
+    console.log(`[ingest] db: ${dbPath}`);
+    const db = openDb(dbPath);
+    const accounts = loadEmailAccountsFromEnv();
+    if (accounts.length === 0) {
+      console.error(
+        "[ingest] no email accounts configured. Set GMAIL_USER_1 / GMAIL_APP_PWD_1 " +
+          "(and optionally _2 / _3 / _4) in env or in the daemon's launchd plist.",
+      );
+      process.exit(2);
+    }
+    console.log(
+      `[ingest] enriching Swiggy/Zomato items from ${accounts.length} email account(s): ` +
+        accounts.map((a) => a.user).join(", "),
+    );
+    const result = await backfillSwiggyZomatoItems(db, accounts, {
+      verbose: true,
+    });
+    console.log("\n[ingest] item-enrichment summary:");
+    console.log(`  candidates:        ${result.candidates}`);
+    console.log(`  already enriched:  ${result.alreadyEnriched}`);
+    console.log(`  newly matched:     ${result.matched}`);
+    console.log(`  unmatched:         ${result.unmatched}`);
+    console.log("  per account:");
+    for (const a of result.perAccount) {
+      console.log(
+        `    ${a.user}: ${a.swiggyEmailsFetched} swiggy emails (${a.swiggyParsed} parsed), ${a.zomatoEmailsFetched} zomato emails (${a.zomatoParsed} parsed)`,
+      );
     }
     process.exit(0);
   }
