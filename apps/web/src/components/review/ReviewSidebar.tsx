@@ -24,6 +24,8 @@ import { displayCounterparty } from "@/lib/narration";
 
 import { TimeNavigator } from "./TimeNavigator";
 import { ActiveFilterChips, describeTimeSelection } from "./ActiveFilterChips";
+import { TimelineColumns } from "./TimelineColumns";
+import { buildTimelineColumns } from "./buildTimelineColumns";
 
 export interface SidebarPeople {
   id: string;
@@ -81,6 +83,13 @@ export function ReviewSidebar(props: ReviewSidebarProps) {
     (filter.accountId != null ? 1 : 0) +
     (filter.unreviewedOnly ? 1 : 0) +
     (filter.sort === "asc" ? 1 : 0);
+
+  // Timeline columns kick in at the right zoom levels (year → months,
+  // month → days). Null = fall back to the vertical list.
+  const timeline = useMemo(
+    () => buildTimelineColumns(list.rows, buckets, activeId),
+    [list.rows, buckets, activeId],
+  );
 
   return (
     <div className="flex h-[calc(100vh-7rem)] flex-col">
@@ -303,19 +312,30 @@ export function ReviewSidebar(props: ReviewSidebarProps) {
         </div>
       )}
 
-      {/* List */}
-      <div className="flex-1 overflow-y-auto">
+      {/* List or Timeline. Timeline kicks in when the user has zoomed into a
+          year or month — those zoom levels have a natural horizontal axis
+          (months / days). At other zoom levels (all-time, day) the
+          vertical list with sticky day headers is the right shape. */}
+      <div className="flex-1 overflow-hidden">
         {list.rows.length === 0 ? (
           <div className="p-6 text-center text-xs text-zinc-500 dark:text-zinc-400">
             No transactions match.
           </div>
+        ) : timeline ? (
+          <TimelineColumns
+            layout={timeline}
+            activeId={activeId}
+            onSelectId={onSelectId}
+          />
         ) : (
-          renderGroupedList(list.rows, activeId, onSelectId)
-        )}
-        {list.totalMatching > list.rows.length && (
-          <div className="border-t border-zinc-100 px-3 py-2 text-center text-[11px] italic text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
-            Showing first {list.rows.length} of {list.totalMatching}. Narrow the
-            filter to see more.
+          <div className="h-full overflow-y-auto">
+            {renderGroupedList(list.rows, activeId, onSelectId)}
+            {list.totalMatching > list.rows.length && (
+              <div className="border-t border-zinc-100 px-3 py-2 text-center text-[11px] italic text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+                Showing first {list.rows.length} of {list.totalMatching}. Narrow
+                the filter to see more.
+              </div>
+            )}
           </div>
         )}
       </div>
