@@ -13,6 +13,13 @@ export interface DaemonPaths {
   inbox: string;
   /** Subdir of inbox for quick-commerce screenshots (Blinkit / Zepto / Instamart). */
   inboxScreenshots: string;
+  /**
+   * Subdir of inbox for per-order invoice PDFs (Zepto today; Blinkit /
+   * BigBasket / Amazon as they ship downloadable invoices). These are
+   * enrichment sources — they ATTACH to canonical txns instead of creating
+   * new ones.
+   */
+  inboxInvoices: string;
   unparsed: string;
   /** Per-source archive directories (archive/hdfc-savings, archive/phonepe, …) */
   archive: Record<SourceType, string>;
@@ -21,6 +28,11 @@ export interface DaemonPaths {
    * per-merchant subdirs lazily: archive/screenshots/zepto/, …/blinkit/, …
    */
   archiveScreenshots: string;
+  /**
+   * Root archive directory for invoice PDFs. Per-merchant subdirs are
+   * created lazily: archive/invoices/zepto/, …/blinkit/, …
+   */
+  archiveInvoices: string;
   /** Internal state directory — logs, processed-file markers, etc. */
   state: string;
 }
@@ -49,9 +61,11 @@ export function resolveDaemonPaths(root?: string): DaemonPaths {
     root: r,
     inbox,
     inboxScreenshots: join(inbox, "screenshots"),
+    inboxInvoices: join(inbox, "invoices"),
     unparsed: join(r, "unparsed"),
     archive,
     archiveScreenshots: join(r, "archive", "screenshots"),
+    archiveInvoices: join(r, "archive", "invoices"),
     state: join(r, ".splitlens"),
   };
 }

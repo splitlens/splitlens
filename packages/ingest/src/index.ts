@@ -18,6 +18,13 @@ export {
   type IngestHdfcCcOptions,
   type WriteHdfcCcIngestArgs,
 } from "./hdfc-cc";
+export {
+  ingestZeptoInvoice,
+  writeZeptoInvoiceEnrichment,
+  type IngestZeptoInvoiceOptions,
+  type WriteZeptoInvoiceArgs,
+  type ZeptoInvoiceOutcome,
+} from "./zepto-invoice";
 export { linkAutopayPairs, type LinkAutopayPairsResult } from "./autopay-linker";
 export {
   backfillTimesFromHdfcAlerts,

@@ -2,13 +2,17 @@
 /**
  * splitlens-daemon — long-running file watcher.
  *
- * Two parallel pipelines:
+ * Three parallel pipelines:
  *
  *   1. <bank>/inbox/*.pdf  →  @splitlens/ingest  →  archive/<source-type>/
  *   2. <bank>/inbox/screenshots/*.{png,jpg,heic}
  *      → @splitlens/ocr (macOS Vision)
  *      → matchTxn against the canonical ledger
  *      → transaction_sources row + archive/screenshots/<merchant>/
+ *   3. <bank>/inbox/invoices/*.pdf
+ *      → @splitlens/ingest:ingestZeptoInvoice (per-order PDFs)
+ *      → match canonical UPI debit by date + amount
+ *      → transaction_sources row + archive/invoices/<merchant>/
  *
  * On any failure, files move to `unparsed/<name>` with a `.error.log` sibling
  * so the user can triage without consulting the daemon's main log.
@@ -45,6 +49,7 @@ import { findVisionBinary } from "@splitlens/ocr";
 import { resolveDaemonPaths, type DaemonPaths } from "./paths";
 import { parsePollIntervalMs, schedulePoll, type ScheduleHandle } from "./poll";
 import { processInboxFile } from "./process-file";
+import { processInvoiceFile } from "./process-invoice";
 import { processScreenshotFile } from "./process-screenshot";
 
 function log(msg: string, extra?: Record<string, unknown>) {
@@ -59,9 +64,11 @@ function log(msg: string, extra?: Record<string, unknown>) {
 function ensureDirs(paths: DaemonPaths) {
   mkdirSync(paths.inbox, { recursive: true });
   mkdirSync(paths.inboxScreenshots, { recursive: true });
+  mkdirSync(paths.inboxInvoices, { recursive: true });
   mkdirSync(paths.unparsed, { recursive: true });
   mkdirSync(paths.state, { recursive: true });
   mkdirSync(paths.archiveScreenshots, { recursive: true });
+  mkdirSync(paths.archiveInvoices, { recursive: true });
   for (const dir of Object.values(paths.archive)) mkdirSync(dir, { recursive: true });
 }
 
@@ -163,6 +170,48 @@ async function main() {
     log("screenshot watcher error", { error: String(e) }),
   );
 
+  // Invoice watcher: per-order invoice PDFs (Zepto today). Enrichment path —
+  // attaches the items + total to an existing canonical UPI debit rather
+  // than creating a new transactions row.
+  const invoiceWatcher = chokidar.watch(paths.inboxInvoices, {
+    persistent: true,
+    ignoreInitial: false,
+    depth: 0,
+    awaitWriteFinish: {
+      stabilityThreshold: 500,
+      pollInterval: 100,
+    },
+  });
+
+  invoiceWatcher.on("add", async (filePath) => {
+    const name = basename(filePath);
+    log("invoice detected", { name });
+    try {
+      const t0 = Date.now();
+      const processed = await processInvoiceFile(filePath, db, paths);
+      const dt = Date.now() - t0;
+      const o = processed.outcome;
+      const txnId =
+        o.kind === "zepto" && o.result.kind === "enriched"
+          ? o.result.transactionId
+          : undefined;
+      log(`invoice processed in ${dt}ms`, {
+        name,
+        outcome: o.kind === "zepto" ? `zepto.${o.result.kind}` : o.kind,
+        txnId,
+      });
+    } catch (e) {
+      log("invoice unhandled error", {
+        name,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  });
+
+  invoiceWatcher.on("error", (e) =>
+    log("invoice watcher error", { error: String(e) }),
+  );
+
   // Fire the email-driven time-backfill once at startup, then keep polling
   // on an interval. Skips silently when no GMAIL_USER_* env vars are set.
   // Runs after the watcher is up so it doesn't block file-add events;
@@ -194,7 +243,11 @@ async function main() {
     shuttingDown = true;
     log(`received ${signal}, shutting down`);
     pollHandle?.cancel();
-    await Promise.all([watcher.close(), screenshotWatcher.close()]);
+    await Promise.all([
+      watcher.close(),
+      screenshotWatcher.close(),
+      invoiceWatcher.close(),
+    ]);
     closeDb(db);
     process.exit(0);
   };
