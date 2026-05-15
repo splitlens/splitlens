@@ -21,6 +21,7 @@ import {
   listTransactionsForReview,
   getTransactionForReview,
   getReviewFilterMeta,
+  getTimeBuckets,
   type ReviewListFilter,
 } from "@/lib/review-repo";
 import { listKnownPeople } from "../friends/actions";
@@ -50,6 +51,8 @@ function readInt(v: string | string[] | undefined): number | null {
 
 export default async function ReviewPage({ searchParams }: PageProps) {
   const sp = await searchParams;
+  const sortParam = readStr(sp.sort);
+  const todParam = readStr(sp.tod);
   const filter: ReviewListFilter = {
     from: readStr(sp.from),
     to: readStr(sp.to),
@@ -58,12 +61,21 @@ export default async function ReviewPage({ searchParams }: PageProps) {
     personId: readStr(sp.personId),
     accountId: readInt(sp.accountId),
     q: readStr(sp.q),
+    sort: sortParam === "asc" ? "asc" : sortParam === "desc" ? "desc" : undefined,
+    timeOfDay:
+      todParam === "morning" ||
+      todParam === "afternoon" ||
+      todParam === "evening" ||
+      todParam === "night"
+        ? todParam
+        : null,
   };
 
-  const [list, meta, people] = await Promise.all([
+  const [list, meta, people, buckets] = await Promise.all([
     listTransactionsForReview(filter),
     getReviewFilterMeta(),
     listKnownPeople(),
+    getTimeBuckets(filter),
   ]);
 
   // Pick the active row: explicit ?id wins; otherwise first unreviewed in the
@@ -82,6 +94,7 @@ export default async function ReviewPage({ searchParams }: PageProps) {
       list={list}
       meta={meta}
       people={people}
+      buckets={buckets}
       activeId={activeId}
       activeDetail={detail}
     />

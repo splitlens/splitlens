@@ -25,6 +25,7 @@ import type {
   ReviewListResult,
   ReviewTransactionDetail,
   ReviewFilterMeta,
+  TimeBuckets,
 } from "@/lib/review-repo";
 
 import { ReviewSidebar } from "./ReviewSidebar";
@@ -41,6 +42,7 @@ export interface ReviewLayoutProps {
     relationship: string;
     txnCount: number;
   }>;
+  buckets: TimeBuckets;
   activeId: number | null;
   activeDetail: ReviewTransactionDetail | null;
 }
@@ -50,7 +52,7 @@ export function ReviewLayout(props: ReviewLayoutProps) {
   const params = useSearchParams();
   const [pending, startTransition] = useTransition();
 
-  const { list, meta, people, filter, activeId, activeDetail } = props;
+  const { list, meta, people, buckets, filter, activeId, activeDetail } = props;
 
   /** Mutate a single URL search param without losing the others. */
   const setParam = useCallback(
@@ -72,23 +74,25 @@ export function ReviewLayout(props: ReviewLayoutProps) {
       // the first unreviewed under the new filter.
       next.delete("id");
       const map: Record<string, string | null | undefined> = {
-        from: patch.from ?? (patch.from === null ? null : undefined),
-        to: patch.to ?? (patch.to === null ? null : undefined),
-        category: patch.category ?? (patch.category === null ? null : undefined),
+        from: "from" in patch ? (patch.from ?? null) : undefined,
+        to: "to" in patch ? (patch.to ?? null) : undefined,
+        category: "category" in patch ? (patch.category ?? null) : undefined,
         unreviewed:
           "unreviewedOnly" in patch
             ? patch.unreviewedOnly
               ? "true"
               : null
             : undefined,
-        personId: patch.personId ?? (patch.personId === null ? null : undefined),
+        personId: "personId" in patch ? (patch.personId ?? null) : undefined,
         accountId:
-          patch.accountId != null
-            ? String(patch.accountId)
-            : patch.accountId === null
-              ? null
-              : undefined,
-        q: patch.q ?? (patch.q === null ? null : undefined),
+          "accountId" in patch
+            ? patch.accountId != null
+              ? String(patch.accountId)
+              : null
+            : undefined,
+        q: "q" in patch ? (patch.q ?? null) : undefined,
+        sort: "sort" in patch ? (patch.sort ?? null) : undefined,
+        tod: "timeOfDay" in patch ? (patch.timeOfDay ?? null) : undefined,
       };
       for (const [k, v] of Object.entries(map)) {
         if (v === undefined) continue;
@@ -159,6 +163,7 @@ export function ReviewLayout(props: ReviewLayoutProps) {
         <ReviewSidebar
           list={list}
           meta={meta}
+          buckets={buckets}
           filter={filter}
           activeId={activeId}
           onSelectId={goToId}

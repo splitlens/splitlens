@@ -12,6 +12,7 @@
 import "server-only";
 import { sql } from "drizzle-orm";
 import { openDb } from "@splitlens/db";
+import { deriveSelection } from "./review-time";
 
 let _db: ReturnType<typeof openDb> | null = null;
 function db() {
@@ -42,6 +43,19 @@ export interface ReviewListFilter {
   limit?: number;
   /** Pagination offset. */
   offset?: number;
+  /**
+   * Sort order in the sidebar list.
+   *   - "desc" (default) — newest first (the dashboard convention)
+   *   - "asc"            — oldest first, useful for chronological review
+   */
+  sort?: "asc" | "desc";
+  /**
+   * Time-of-day bucket: "morning" (06-12), "afternoon" (12-17),
+   * "evening" (17-21), "night" (21-06). Filters rows by `txn_time`.
+   * Null/undefined = any time. Rows with NULL `txn_time` are excluded when
+   * a bucket is set.
+   */
+  timeOfDay?: "morning" | "afternoon" | "evening" | "night" | null;
 }
 
 export interface ReviewListRow {
@@ -95,10 +109,28 @@ export async function listTransactionsForReview(
     const needle = `%${filter.q.trim().toLowerCase()}%`;
     where.push(sql`(LOWER(coalesce(t.counterparty,'')) LIKE ${needle} OR LOWER(coalesce(t.narration,'')) LIKE ${needle})`);
   }
+  if (filter.timeOfDay) {
+    // SQLite's lexicographic comparison works on HH:MM strings since they're
+    // fixed-width. "Night" wraps midnight, so it's a UNION of two windows.
+    if (filter.timeOfDay === "morning") {
+      where.push(sql`t.txn_time IS NOT NULL AND t.txn_time >= '06:00' AND t.txn_time < '12:00'`);
+    } else if (filter.timeOfDay === "afternoon") {
+      where.push(sql`t.txn_time IS NOT NULL AND t.txn_time >= '12:00' AND t.txn_time < '17:00'`);
+    } else if (filter.timeOfDay === "evening") {
+      where.push(sql`t.txn_time IS NOT NULL AND t.txn_time >= '17:00' AND t.txn_time < '21:00'`);
+    } else if (filter.timeOfDay === "night") {
+      where.push(sql`t.txn_time IS NOT NULL AND (t.txn_time >= '21:00' OR t.txn_time < '06:00')`);
+    }
+  }
   const whereSql =
     where.length === 0
       ? sql``
       : sql`WHERE ${sql.join(where, sql` AND `)}`;
+
+  const orderSql =
+    filter.sort === "asc"
+      ? sql`ORDER BY t.txn_date ASC, coalesce(t.txn_time, '00:00') ASC, t.id ASC`
+      : sql`ORDER BY t.txn_date DESC, coalesce(t.txn_time, '00:00') DESC, t.id DESC`;
 
   const rows = db().all<{
     id: number;
@@ -124,7 +156,7 @@ export async function listTransactionsForReview(
            ) AS has_receipt
     FROM transactions t
     ${whereSql}
-    ORDER BY t.txn_date DESC, coalesce(t.txn_time, '00:00') DESC, t.id DESC
+    ${orderSql}
     LIMIT ${limit} OFFSET ${offset}
   `);
 
@@ -425,3 +457,152 @@ export async function findNextUnreviewedAfter(
   `);
   return next?.id ?? null;
 }
+
+// ============================================================================
+// Time navigator buckets — year / month / day chips
+// ============================================================================
+
+export interface TimeBuckets {
+  /** All years that have at least one matching txn. Sorted ascending. */
+  years: Array<{ year: number; count: number }>;
+  /** Months within the selected year (1-12). Empty when no year is selected. */
+  months: Array<{ year: number; month: number; count: number }>;
+  /** Days within the selected year+month. Empty when no month is selected. */
+  days: Array<{ year: number; month: number; day: number; count: number }>;
+  /** Time-of-day buckets within the selected day. Empty when no day is selected. */
+  timeOfDay: Array<{
+    bucket: "morning" | "afternoon" | "evening" | "night";
+    count: number;
+  }>;
+  /** Currently-selected year/month/day, derived from filter.from/to. */
+  selectedYear: number | null;
+  selectedMonth: number | null;
+  selectedDay: number | null;
+}
+
+/**
+ * Returns hierarchical date counts for the TimeNavigator strip.
+ *
+ * The "selection" is implicit in the filter's from/to range:
+ *   from=2026-01-01 + to=2026-12-31  → year 2026 selected
+ *   from=2026-05-01 + to=2026-05-31  → year 2026, month May selected
+ *   from=2026-05-14 + to=2026-05-14  → year 2026, month May, day 14 selected
+ *   anything else                    → nothing selected; only `years` is filled
+ *
+ * Other filter fields (category, account, person, q, unreviewedOnly) DO
+ * apply to the counts — so picking "Food:Restaurant" + drilling into May
+ * shows you how many food txns there were each day. Time-of-day filter is
+ * intentionally NOT applied to its own bucket counts (you'd want to see
+ * "morning had 3, afternoon had 7" regardless of which bucket you're in).
+ */
+export async function getTimeBuckets(
+  filter: ReviewListFilter = {},
+): Promise<TimeBuckets> {
+  const baseWhere: ReturnType<typeof sql>[] = [];
+  if (filter.category) baseWhere.push(sql`t.category = ${filter.category}`);
+  if (filter.personId) baseWhere.push(sql`t.person_id = ${filter.personId}`);
+  if (filter.accountId != null) baseWhere.push(sql`t.account_id = ${filter.accountId}`);
+  if (filter.unreviewedOnly) baseWhere.push(sql`t.reviewed = 0`);
+  if (filter.q && filter.q.trim()) {
+    const needle = `%${filter.q.trim().toLowerCase()}%`;
+    baseWhere.push(
+      sql`(LOWER(coalesce(t.counterparty,'')) LIKE ${needle} OR LOWER(coalesce(t.narration,'')) LIKE ${needle})`,
+    );
+  }
+  const baseWhereSql =
+    baseWhere.length === 0 ? sql`` : sql`AND ${sql.join(baseWhere, sql` AND `)}`;
+
+  // Years — always show every year with any matching txn.
+  const yearRows = db().all<{ year: string; n: number }>(sql`
+    SELECT substr(t.txn_date, 1, 4) AS year, count(*) AS n
+    FROM transactions t
+    WHERE t.txn_date IS NOT NULL ${baseWhereSql}
+    GROUP BY year
+    ORDER BY year ASC
+  `);
+
+  // Selection derivation from from/to.
+  const { selectedYear, selectedMonth, selectedDay } = deriveSelection(
+    filter.from,
+    filter.to,
+  );
+
+  // Months — only when a year is selected.
+  let monthRows: Array<{ ym: string; n: number }> = [];
+  if (selectedYear != null) {
+    const yearPrefix = `${selectedYear}-`;
+    monthRows = db().all<{ ym: string; n: number }>(sql`
+      SELECT substr(t.txn_date, 1, 7) AS ym, count(*) AS n
+      FROM transactions t
+      WHERE substr(t.txn_date, 1, 4) = ${String(selectedYear)} ${baseWhereSql}
+      GROUP BY ym
+      ORDER BY ym ASC
+    `);
+    void yearPrefix;
+  }
+
+  // Days — only when a month is selected.
+  let dayRows: Array<{ ymd: string; n: number }> = [];
+  if (selectedYear != null && selectedMonth != null) {
+    const monthPrefix = `${selectedYear}-${String(selectedMonth).padStart(2, "0")}`;
+    dayRows = db().all<{ ymd: string; n: number }>(sql`
+      SELECT t.txn_date AS ymd, count(*) AS n
+      FROM transactions t
+      WHERE substr(t.txn_date, 1, 7) = ${monthPrefix} ${baseWhereSql}
+      GROUP BY ymd
+      ORDER BY ymd ASC
+    `);
+  }
+
+  // Time-of-day — only when a single day is selected.
+  let timeOfDayCounts: Array<{
+    bucket: "morning" | "afternoon" | "evening" | "night";
+    count: number;
+  }> = [];
+  if (selectedYear != null && selectedMonth != null && selectedDay != null) {
+    const isoDay = `${selectedYear}-${String(selectedMonth).padStart(2, "0")}-${String(selectedDay).padStart(2, "0")}`;
+    const r = db().get<{
+      morning: number;
+      afternoon: number;
+      evening: number;
+      night: number;
+    }>(sql`
+      SELECT
+        count(*) FILTER (WHERE t.txn_time IS NOT NULL AND t.txn_time >= '06:00' AND t.txn_time < '12:00') AS morning,
+        count(*) FILTER (WHERE t.txn_time IS NOT NULL AND t.txn_time >= '12:00' AND t.txn_time < '17:00') AS afternoon,
+        count(*) FILTER (WHERE t.txn_time IS NOT NULL AND t.txn_time >= '17:00' AND t.txn_time < '21:00') AS evening,
+        count(*) FILTER (WHERE t.txn_time IS NOT NULL AND (t.txn_time >= '21:00' OR t.txn_time < '06:00')) AS night
+      FROM transactions t
+      WHERE t.txn_date = ${isoDay} ${baseWhereSql}
+    `);
+    if (r) {
+      timeOfDayCounts = (
+        [
+          ["morning", r.morning],
+          ["afternoon", r.afternoon],
+          ["evening", r.evening],
+          ["night", r.night],
+        ] as const
+      ).map(([bucket, count]) => ({ bucket, count }));
+    }
+  }
+
+  return {
+    years: yearRows.map((r) => ({ year: Number(r.year), count: r.n })),
+    months: monthRows.map((r) => {
+      const [y, m] = r.ym.split("-");
+      return { year: Number(y), month: Number(m), count: r.n };
+    }),
+    days: dayRows.map((r) => {
+      const [y, m, d] = r.ymd.split("-");
+      return { year: Number(y), month: Number(m), day: Number(d), count: r.n };
+    }),
+    timeOfDay: timeOfDayCounts,
+    selectedYear,
+    selectedMonth,
+    selectedDay,
+  };
+}
+
+// `deriveSelection` + `rangeForSelection` live in ./review-time so the
+// client-side TimeNavigator can import them too (this file is server-only).
