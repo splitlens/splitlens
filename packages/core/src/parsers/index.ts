@@ -27,3 +27,4 @@ export type Parser = (pdf: Uint8Array, opts?: ParseOptions) => Promise<ParseResu
 
 export { parseHdfcSavings, parseHdfcSavingsPages } from "./hdfc-savings";
 export { parseHdfcCc, parseHdfcCcText } from "./hdfc-cc";
+export { parsePhonePe, parsePhonePeText } from "./phonepe";

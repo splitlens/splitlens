@@ -1,9 +1,9 @@
 {
-  "name": "@splitlens/db",
+  "name": "@splitlens/ingest",
   "version": "0.0.1",
   "private": true,
   "license": "AGPL-3.0-only",
-  "description": "Drizzle ORM schema + better-sqlite3 client for SplitLens. The single on-disk SQLite database is the source of truth for ingested statements; web/CLI consumers read through this package.",
+  "description": "Node-side ingestion: takes a statement file, parses it with @splitlens/core, writes canonical rows into @splitlens/db. Used by the daemon and the splitlens-ingest CLI.",
   "type": "module",
   "main": "./src/index.ts",
   "module": "./src/index.ts",
@@ -12,15 +12,10 @@
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"
-    },
-    "./schema": {
-      "types": "./src/schema.ts",
-      "import": "./src/schema.ts"
-    },
-    "./client": {
-      "types": "./src/client.ts",
-      "import": "./src/client.ts"
     }
+  },
+  "bin": {
+    "splitlens-ingest": "./src/cli.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -29,16 +24,18 @@
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "clean": "rm -rf dist .turbo",
-    "db:generate": "drizzle-kit generate"
+    "ingest": "tsx src/cli.ts"
   },
   "dependencies": {
-    "better-sqlite3": "^11.10.0",
-    "drizzle-orm": "^0.38.3"
+    "@splitlens/core": "workspace:*",
+    "@splitlens/db": "workspace:*",
+    "drizzle-orm": "^0.38.4",
+    "pdfjs-dist": "^4.10.38"
   },
   "devDependencies": {
     "@splitlens/tsconfig": "workspace:*",
-    "@types/better-sqlite3": "^7.6.13",
-    "drizzle-kit": "^0.30.1",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.22.0",
     "typescript": "^5.7.3",
     "vitest": "^2.1.9"
   }

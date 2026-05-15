@@ -111,6 +111,65 @@ export interface ParseResult {
   transactions: RawTransaction[];
 }
 
+/**
+ * PhonePe statement transaction. Has the time-of-day and UTR that bank PDFs
+ * lack — used downstream to enrich matching bank rows.
+ *
+ * Matching strategy: UTR → bank `refNo` exact match; fall back to
+ * (txnDate, amount, direction) when UTR isn't present in the bank narration.
+ */
+export interface PhonePeRawTransaction {
+  /** ISO YYYY-MM-DD */
+  txnDate: ISODate;
+  /** HH:MM (24-hour). Always present — every PhonePe row has a time. */
+  txnTime: string;
+  /** "in" = received credit, "out" = paid debit */
+  direction: Direction;
+  /** Raw counterparty string: a name, a UPI VPA, or a masked account "******1234". */
+  counterparty: string;
+  /** Positive INR amount */
+  amount: number;
+  /** UPI reference number — primary join key against bank refNo. */
+  utr: string;
+  /** PhonePe-internal transaction id (varies in length: alphanumeric). */
+  transactionId: string;
+  /**
+   * Linked bank-account last 4 digits ("2491" when source line was
+   * "Debited from XX2491"). Null for wallet-only transactions.
+   */
+  sourceAccountLast4: string | null;
+  /**
+   * Coarse counterparty classification:
+   *   - "bill"          → "Bill paid - <service>" row
+   *   - "self_transfer" → counterparty is a masked account "******1234"
+   *   - "vpa"           → counterparty contains '@' (UPI VPA like "merchant@axisbank")
+   *   - "named"         → anything else (person name or branded merchant)
+   */
+  kind: "bill" | "self_transfer" | "vpa" | "named";
+  /**
+   * When the payment was split across two funding sources (linked bank +
+   * wallet, or two linked accounts), the raw breakdown verbatim — e.g.
+   * "INR 20.24 | Wallet INR 39.76". Null when the txn came entirely from
+   * the linked bank shown in `sourceAccountLast4`. Used downstream to
+   * reconcile against the bank ledger (which only sees the bank portion).
+   */
+  splitSourceRaw: string | null;
+  /** 0-based index within the source PDF, for idempotent ingestion. */
+  sourceRowIdx: number;
+}
+
+export interface PhonePeStatement {
+  /** "+91XXXXXXXXXX" if found on page 1. */
+  phoneNumber?: string;
+  periodFrom?: ISODate;
+  periodTo?: ISODate;
+}
+
+export interface PhonePeParseResult {
+  statement: PhonePeStatement | null;
+  transactions: PhonePeRawTransaction[];
+}
+
 // NOTE: Person type lives in `../people/registry` (richer, with relationship +
 // aliases). Re-imported by settlement directly. This file used to define a
 // thinner version; removed to avoid the duplicate-export ambiguity at the
