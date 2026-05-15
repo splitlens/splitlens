@@ -28,6 +28,54 @@ export interface ExtractedPage {
   words: PdfWord[];
 }
 
+/**
+ * Credit-card transaction. Distinct from RawTransaction because CC statements
+ * have a different shape (no running balance; amount is signed; FCY support;
+ * rewards points; payment vs purchase distinction).
+ */
+export interface CcRawTransaction {
+  /** ISO YYYY-MM-DD */
+  txnDate: ISODate;
+  /** HH:MM, or null for batch-posted charges */
+  txnTime: string | null;
+  /** Merchant / description text */
+  description: string;
+  /** Always positive in INR. is_payment distinguishes credit vs debit. */
+  amount: number;
+  /** True = credit to card (autopay/refund); False = purchase or charge */
+  isPayment: boolean;
+  /** True = international purchase (foreign currency) */
+  isInternational: boolean;
+  /** e.g., "USD 118.00" — only set for international transactions */
+  foreignAmount?: string;
+  /** True = IGST/CGST/SGST, FCY markup, EMI fee, finance charge, etc. */
+  isCharge: boolean;
+  /** Reward points earned, if any */
+  rewards?: number;
+  /** 0-based index within the source PDF */
+  sourceRowIdx: number;
+}
+
+export interface CcStatement {
+  bank: string;
+  cardType: string; // 'Regalia', 'Millennia', etc.
+  cardLast4: string;
+  customerName?: string;
+  statementDate?: ISODate;
+  periodFrom?: ISODate;
+  periodTo?: ISODate;
+  totalAmountDue?: number;
+  minimumDue?: number;
+  dueDate?: ISODate;
+  creditLimit?: number;
+  availableCredit?: number;
+}
+
+export interface CcParseResult {
+  statement: CcStatement | null;
+  transactions: CcRawTransaction[];
+}
+
 export type Direction = "in" | "out";
 
 export interface RawTransaction {
