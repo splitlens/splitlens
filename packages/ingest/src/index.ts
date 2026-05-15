@@ -21,7 +21,9 @@ export {
 export { linkAutopayPairs, type LinkAutopayPairsResult } from "./autopay-linker";
 export {
   backfillTimesFromHdfcAlerts,
+  backfillSwiggyZomatoItems,
   type TimeBackfillResult,
+  type ItemEnrichResult,
 } from "./email-backfill";
 export {
   dispatchFile,

@@ -924,6 +924,10 @@ export async function getFriendDetail(personId: string): Promise<FriendDetail | 
     })
     .filter((x): x is NonNullable<typeof x> => x !== null);
 
+  // Single batched lookup for item enrichment across both direct + shared
+  // sets; cheaper than two separate joins.
+  const allIds = [...direct.map((r) => r.id), ...sharedTxns.map((r) => r.id)];
+  const itemMap = getItemEnrichmentsForTxns(allIds);
   return {
     person,
     directTxns: direct.map((r) => ({
@@ -939,8 +943,12 @@ export async function getFriendDetail(personId: string): Promise<FriendDetail | 
       accountBank: r.bank,
       accountType: r.type,
       accountLast4: r.last4,
+      items: itemMap.get(r.id) ?? null,
     })),
-    sharedTxns,
+    sharedTxns: sharedTxns.map((t) => ({
+      ...t,
+      items: itemMap.get(t.id) ?? null,
+    })),
   };
 }
 
@@ -1028,6 +1036,92 @@ export interface DrillDownTxn {
   accountBank: string;
   accountType: string;
   accountLast4: string;
+  /**
+   * Item-level breakdown from a Swiggy / Zomato receipt email, when this
+   * transaction has one. Surfaced by the `enrich-items` CLI; null otherwise.
+   */
+  items?: ItemEnrichment | null;
+}
+
+/**
+ * Shape of a Swiggy / Zomato item-enrichment block. Mirrors the
+ * `transaction_sources.raw_json` payload that the email backfill writes,
+ * narrowed to just the fields the UI cares about.
+ */
+export interface ItemEnrichment {
+  /** Which extractor produced this — "swiggy" | "zomato". */
+  extractorId: string;
+  /** Order kind: "food_delivery" | "instamart" | "zomato_delivery" | "zomato_dining". */
+  kind: string;
+  /** Order id when known. */
+  orderId: string | null;
+  /** Restaurant or store name. */
+  restaurant: string | null;
+  /** Order total — usually within a rupee of the canonical withdrawal. */
+  amount: number;
+  /** Line items. Price is only present for Swiggy; Zomato emails don't break it down per line. */
+  items: Array<{ qty: number; name: string; price?: number }>;
+  /** One-line summary the extractor produced. */
+  summary: string;
+}
+
+/**
+ * Parse the raw_json blob written by backfillSwiggyZomatoItems back into
+ * the UI-facing ItemEnrichment shape. Returns null when the blob doesn't
+ * look like one of ours (defensive — old rows or future format changes).
+ */
+function parseItemEnrichment(rawJson: string | null): ItemEnrichment | null {
+  if (!rawJson) return null;
+  try {
+    const obj = JSON.parse(rawJson) as Record<string, unknown>;
+    const items = Array.isArray(obj.items)
+      ? (obj.items as Array<Record<string, unknown>>)
+          .map((it) => ({
+            qty: Number(it.qty ?? 1),
+            name: String(it.name ?? ""),
+            price: it.price != null ? Number(it.price) : undefined,
+          }))
+          .filter((it) => it.name.length > 0)
+      : [];
+    return {
+      extractorId: String(obj.extractorId ?? ""),
+      kind: String(obj.kind ?? ""),
+      orderId: obj.orderId != null ? String(obj.orderId) : null,
+      restaurant: obj.restaurant != null ? String(obj.restaurant) : null,
+      amount: Number(obj.amount ?? 0),
+      items,
+      summary: String(obj.summary ?? ""),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Pull email-derived item enrichment (if any) for every txn id in `ids`.
+ * Returns a map for cheap join-in-memory by the caller. Empty map when
+ * no rows match — never null.
+ *
+ * Picks one enrichment per txn even if multiple exist (Swiggy AND Zomato
+ * matched somehow): the one with the lowest source row id, which is the
+ * first to be ingested. In practice each txn has at most one.
+ */
+function getItemEnrichmentsForTxns(ids: number[]): Map<number, ItemEnrichment> {
+  const out = new Map<number, ItemEnrichment>();
+  if (ids.length === 0) return out;
+  const rows = db().all<{ transaction_id: number; raw_json: string }>(sql`
+    SELECT transaction_id, raw_json
+    FROM transaction_sources
+    WHERE source_type IN ('swiggy_email', 'zomato_email')
+      AND transaction_id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+    ORDER BY id ASC
+  `);
+  for (const r of rows) {
+    if (out.has(r.transaction_id)) continue;
+    const parsed = parseItemEnrichment(r.raw_json);
+    if (parsed) out.set(r.transaction_id, parsed);
+  }
+  return out;
 }
 
 export async function getTransactionsForDate(date: string): Promise<DrillDownTxn[]> {
@@ -1055,6 +1149,7 @@ export async function getTransactionsForDate(date: string): Promise<DrillDownTxn
     WHERE t.txn_date = ${date}
     ORDER BY coalesce(t.txn_time, '00:00') ASC, t.id ASC
   `);
+  const itemMap = getItemEnrichmentsForTxns(rows.map((r) => r.id));
   return rows.map((r) => ({
     id: r.id,
     txnDate: r.txn_date,
@@ -1068,6 +1163,7 @@ export async function getTransactionsForDate(date: string): Promise<DrillDownTxn
     accountBank: r.bank,
     accountType: r.type,
     accountLast4: r.last4,
+    items: itemMap.get(r.id) ?? null,
   }));
 }
 

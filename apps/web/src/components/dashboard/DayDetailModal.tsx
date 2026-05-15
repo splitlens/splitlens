@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import type { DrillDownTxn } from "@/lib/repo";
+import type { DrillDownTxn, ItemEnrichment } from "@/lib/repo";
 import { fmtDate, fmtInr } from "@/lib/format";
 import { KindBadge } from "./TopCounterparties";
 
@@ -109,6 +109,9 @@ export function DayDetailModal({
                             {t.narration}
                           </div>
                         )}
+                        {t.items && t.items.items.length > 0 && (
+                          <ItemList items={t.items} />
+                        )}
                       </div>
                       <div className="shrink-0 text-right">
                         {t.withdrawal != null && (
@@ -130,6 +133,47 @@ export function DayDetailModal({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Inline item-level breakdown for Swiggy / Zomato txns, when the email
+ * enrichment pass has attached one. Compact — fits under the existing
+ * txn row without dwarfing it. Shows the leading 6 items; the rest are
+ * collapsed into a "+ N more" suffix so big Instamart orders don't blow
+ * out the modal height.
+ */
+function ItemList({ items }: { items: ItemEnrichment }) {
+  const MAX = 6;
+  const head = items.items.slice(0, MAX);
+  const extra = items.items.length - head.length;
+  const iconForKind = (kind: string): string => {
+    if (kind === "instamart") return "🛒";
+    if (kind === "zomato_dining") return "🍽️";
+    if (kind === "zomato_delivery") return "🛵";
+    return "🍔";
+  };
+  return (
+    <div className="mt-1.5 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-xs text-zinc-600 dark:text-zinc-400">
+      <span className="text-[11px]">{iconForKind(items.kind)}</span>
+      {items.restaurant && (
+        <span className="font-medium text-zinc-700 dark:text-zinc-300">
+          {items.restaurant.split(",")[0]}
+        </span>
+      )}
+      {head.map((it, i) => (
+        <span key={`${it.name}-${i}`} className="whitespace-nowrap">
+          {i === 0 && !items.restaurant ? "" : "·"}{" "}
+          {it.name}
+          {it.qty > 1 ? ` ×${it.qty}` : ""}
+        </span>
+      ))}
+      {extra > 0 && (
+        <span className="italic text-zinc-500 dark:text-zinc-500">
+          + {extra} more
+        </span>
+      )}
     </div>
   );
 }
