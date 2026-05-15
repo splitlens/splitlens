@@ -31,6 +31,7 @@ import {
   categorize,
   DEFAULT_RULES,
   identifyPerson,
+  identifyPersonByName,
   DEFAULT_PEOPLE,
 } from "@splitlens/core";
 import type { PhonePeParseResult, PhonePeRawTransaction } from "@splitlens/core";
@@ -188,7 +189,9 @@ export function writePhonePeIngest(args: WritePhonePeIngestArgs): IngestResult {
         // PhonePe-second ingest can still backfill an HDFC-first row.
         const synthNarration = `UPI-${t.counterparty}-${t.kind}-${t.utr}`;
         const { category, matchedRule } = categorize(synthNarration, DEFAULT_RULES);
-        const person = identifyPerson(synthNarration, DEFAULT_PEOPLE);
+        const person =
+          identifyPerson(synthNarration, DEFAULT_PEOPLE) ??
+          identifyPersonByName(t.counterparty, DEFAULT_PEOPLE);
         mergeIntoCanonical(tx, matchedId, {
           txnTime: t.txnTime,
           counterparty: t.counterparty,
@@ -261,7 +264,12 @@ function phonepeRowToCanonical(t: PhonePeRawTransaction, accountId: number) {
   // engine tolerates both shapes; this combined form gets the best coverage.
   const synthNarration = `UPI-${t.counterparty}-${t.kind}-${t.utr}`;
   const { category, matchedRule } = categorize(synthNarration, DEFAULT_RULES);
-  const person = identifyPerson(synthNarration, DEFAULT_PEOPLE);
+  // Person identity: UPI-handle pass first (high confidence), then fall back
+  // to clean-name match against the counterparty. PhonePe rows often don't
+  // carry the handle, so the name pass is what catches those.
+  const person =
+    identifyPerson(synthNarration, DEFAULT_PEOPLE) ??
+    identifyPersonByName(t.counterparty, DEFAULT_PEOPLE);
   return {
     accountId,
     txnDate: t.txnDate,

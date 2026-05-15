@@ -242,6 +242,10 @@ export interface RecentTxn {
   personId: string | null;
   /** Number of distinct sources that observed this row (1+). 2+ = multi-source enriched. */
   sourceCount: number;
+  /** CSV of person_ids who share this expense. Drives the Friends UI. */
+  sharedWith: string[];
+  /** Total people in the split (1 = not shared, 3 = 3-way split). */
+  shareCount: number;
 }
 
 export async function getRecentTransactions(limit = 100): Promise<RecentTxn[]> {
@@ -258,9 +262,12 @@ export async function getRecentTransactions(limit = 100): Promise<RecentTxn[]> {
     category: string | null;
     person_id: string | null;
     source_count: number;
+    shared_with: string | null;
+    share_count: number;
   }>(sql`
     SELECT t.id, t.txn_date, t.txn_time, t.narration, t.counterparty, t.counterparty_kind,
            t.withdrawal, t.deposit, t.closing_balance, t.category, t.person_id,
+           t.shared_with, t.share_count,
            (SELECT count(DISTINCT source_type) FROM transaction_sources WHERE transaction_id = t.id) AS source_count
     FROM transactions t
     ORDER BY t.txn_date DESC, coalesce(t.txn_time, '00:00') DESC, t.id DESC
@@ -279,6 +286,10 @@ export async function getRecentTransactions(limit = 100): Promise<RecentTxn[]> {
     category: r.category,
     personId: r.person_id,
     sourceCount: r.source_count,
+    sharedWith: r.shared_with
+      ? r.shared_with.split(",").map((s) => s.trim()).filter(Boolean)
+      : [],
+    shareCount: r.share_count ?? 1,
   }));
 }
 
@@ -375,6 +386,629 @@ export async function getDailySpend(): Promise<DailySpendPoint[]> {
     totalOut: Number(r.total ?? 0),
     txnCount: r.n,
   }));
+}
+
+// ============================================================================
+// MONTHLY REPORT — the "review your spending" page
+// ============================================================================
+//
+// Built around an ADHD-friendly review flow: every outgoing transaction in
+// the chosen month is bucketed into one of four queues so the user can chunk
+// the work:
+//
+//   1. house-shape  — bills/groceries/utilities ≥ ₹500, suggest split with flatmates
+//   2. chase-up     — outgoing UPI to a registered friend with no return inflow
+//                     within 14 days; suggest "ask for payback"
+//   3. usual-split  — same counterparty has been shared with the same friends
+//                     ≥2 times before; one-click accept the same split
+//   4. other        — everything else outgoing, no auto-suggestion
+//
+// Already-reviewed and already-shared rows show up in a collapsed "done"
+// section so progress is visible (and undo is one click).
+
+export type ReviewBucket = "house" | "chase" | "usual" | "other" | "done";
+
+export interface ReportTxn {
+  id: number;
+  txnDate: string;
+  txnTime: string | null;
+  counterparty: string | null;
+  narration: string | null;
+  counterpartyKind: string | null;
+  withdrawal: number;
+  category: string | null;
+  personId: string | null;
+  reviewed: boolean;
+  /** Empty array when not yet shared; populated when the user has split it. */
+  sharedWith: string[];
+  shareCount: number;
+  /** Account label e.g. "HDFC Savings XX2491". */
+  accountLabel: string;
+  /** Bucket assigned by the auto-classifier. */
+  bucket: ReviewBucket;
+  /** Pre-baked one-click suggestion, when applicable. */
+  suggestion: {
+    /** Friends to suggest splitting with. */
+    personIds: string[];
+    /** Human-readable reason ("Usually split with Rahul + Shivam", etc.). */
+    reason: string;
+  } | null;
+}
+
+export interface MonthlyReport {
+  yearMonth: string;
+  /** All months we have data for, sorted ASC. Used by the month picker. */
+  availableMonths: string[];
+  totalOut: number;
+  totalIn: number;
+  txnCount: number;
+  reviewedCount: number;
+  reviewedAmount: number;
+  /** Per-bucket transaction lists, all sorted by date asc. */
+  buckets: Record<ReviewBucket, ReportTxn[]>;
+}
+
+/** ISO 'YYYY-MM' or `null` for "current month derived from latest txn date". */
+export async function getMonthlyReport(yearMonth: string | null): Promise<MonthlyReport> {
+  const months = db()
+    .all<{ ym: string }>(sql`
+      SELECT DISTINCT substr(txn_date, 1, 7) AS ym FROM transactions ORDER BY ym
+    `)
+    .map((r) => r.ym);
+
+  const ym = yearMonth ?? months[months.length - 1] ?? new Date().toISOString().slice(0, 7);
+  // Defensive — never let an arbitrary string into the SQL substr() match.
+  if (!/^\d{4}-\d{2}$/.test(ym)) {
+    return {
+      yearMonth: ym,
+      availableMonths: months,
+      totalOut: 0,
+      totalIn: 0,
+      txnCount: 0,
+      reviewedCount: 0,
+      reviewedAmount: 0,
+      buckets: { house: [], chase: [], usual: [], other: [], done: [] },
+    };
+  }
+
+  // Top-of-month counters.
+  const top = db().all<{
+    n: number;
+    out: number;
+    in_: number;
+    reviewed_n: number;
+    reviewed_amt: number;
+  }>(sql`
+    SELECT
+      count(*)                              AS n,
+      coalesce(sum(withdrawal), 0)          AS out,
+      coalesce(sum(deposit), 0)             AS in_,
+      count(*) FILTER (WHERE reviewed = 1)  AS reviewed_n,
+      coalesce(sum(withdrawal) FILTER (WHERE reviewed = 1), 0) AS reviewed_amt
+    FROM transactions
+    WHERE substr(txn_date, 1, 7) = ${ym}
+  `)[0]!;
+
+  // Every outgoing for the month.
+  const rawTxns = db().all<{
+    id: number;
+    txn_date: string;
+    txn_time: string | null;
+    counterparty: string | null;
+    narration: string | null;
+    counterparty_kind: string | null;
+    withdrawal: number | null;
+    category: string | null;
+    person_id: string | null;
+    reviewed: number;
+    shared_with: string | null;
+    share_count: number;
+    bank: string;
+    type: string;
+    last4: string;
+  }>(sql`
+    SELECT t.id, t.txn_date, t.txn_time, t.counterparty, t.narration,
+           t.counterparty_kind, t.withdrawal, t.category, t.person_id,
+           t.reviewed, t.shared_with, t.share_count,
+           a.bank, a.type, a.last4
+    FROM transactions t
+    JOIN accounts a ON a.id = t.account_id
+    WHERE substr(t.txn_date, 1, 7) = ${ym}
+      AND t.withdrawal IS NOT NULL
+      AND t.withdrawal > 0
+    ORDER BY t.txn_date ASC, coalesce(t.txn_time, '00:00') ASC, t.id ASC
+  `);
+
+  // Pre-compute "usually split with whom" by counterparty across ALL history.
+  const usualByCounterparty = computeUsualSharing();
+  // And: incoming UPI from each person within 14 days *of any outgoing*, used
+  // for the chase-up detector.
+  const incomingFromPerson = computeIncomingsByPersonByDate();
+  // Flatmates from the registry, for house-shape suggestions.
+  const flatmates = DEFAULT_PEOPLE.filter((p) => p.relationship === "flatmate").map((p) => p.id);
+
+  const buckets: Record<ReviewBucket, ReportTxn[]> = {
+    house: [],
+    chase: [],
+    usual: [],
+    other: [],
+    done: [],
+  };
+
+  for (const r of rawTxns) {
+    const sharedWith = r.shared_with
+      ? r.shared_with.split(",").map((s) => s.trim()).filter(Boolean)
+      : [];
+    const isReviewed = Boolean(r.reviewed);
+    const isShared = sharedWith.length > 0;
+    const amount = Number(r.withdrawal ?? 0);
+
+    const accountLabel = `${r.bank} ${r.type === "credit_card" ? "CC" : "Savings"} XX${r.last4}`;
+
+    let bucket: ReviewBucket = "other";
+    let suggestion: ReportTxn["suggestion"] = null;
+
+    // Done = already reviewed OR already shared (the latter is implicitly settled).
+    if (isReviewed || isShared) {
+      bucket = "done";
+    } else {
+      const usual = r.counterparty ? usualByCounterparty.get(r.counterparty) : undefined;
+      if (usual && usual.personIds.length > 0) {
+        bucket = "usual";
+        suggestion = {
+          personIds: usual.personIds,
+          reason: `Usually split with ${usual.displayNames.join(" + ")} (last ${usual.count}× with this merchant)`,
+        };
+      } else if (
+        r.person_id &&
+        amount >= 500 &&
+        !hasMatchingReturnInflow(r.person_id, r.txn_date, amount, incomingFromPerson)
+      ) {
+        bucket = "chase";
+        const friend = DEFAULT_PEOPLE.find((p) => p.id === r.person_id);
+        suggestion = {
+          personIds: r.person_id ? [r.person_id] : [],
+          reason: `Paid ${friend?.displayName ?? r.person_id} — no return UPI in 14 days. Forgot to ask back?`,
+        };
+      } else if (isHouseShape(r.category, amount) && flatmates.length > 0) {
+        bucket = "house";
+        suggestion = {
+          personIds: flatmates,
+          reason: `Looks like a house expense — suggest split with flatmates (${flatmates
+            .map((id) => DEFAULT_PEOPLE.find((p) => p.id === id)?.displayName?.split(" ")[0] ?? id)
+            .join(" + ")})`,
+        };
+      } else {
+        bucket = "other";
+      }
+    }
+
+    buckets[bucket].push({
+      id: r.id,
+      txnDate: r.txn_date,
+      txnTime: r.txn_time,
+      counterparty: r.counterparty,
+      narration: r.narration,
+      counterpartyKind: r.counterparty_kind,
+      withdrawal: amount,
+      category: r.category,
+      personId: r.person_id,
+      reviewed: isReviewed,
+      sharedWith,
+      shareCount: r.share_count ?? 1,
+      accountLabel,
+      bucket,
+      suggestion,
+    });
+  }
+
+  return {
+    yearMonth: ym,
+    availableMonths: months,
+    totalOut: Number(top.out ?? 0),
+    totalIn: Number(top.in_ ?? 0),
+    txnCount: top.n,
+    reviewedCount: top.reviewed_n,
+    reviewedAmount: Number(top.reviewed_amt ?? 0),
+    buckets,
+  };
+}
+
+/**
+ * Categories that look like flatmate-shared house expenses. Conservative on
+ * purpose — false positives waste the user's attention.
+ */
+function isHouseShape(category: string | null, amount: number): boolean {
+  if (!category || amount < 500) return false;
+  return (
+    category.startsWith("Bills:Electricity") ||
+    category.startsWith("Bills:Internet") ||
+    category.startsWith("Bills:Mobile") ||
+    category.startsWith("Bills:Rent") ||
+    category.startsWith("Bills:Gas") ||
+    category.startsWith("Food:Groceries") ||
+    category.startsWith("Food:Quick Commerce") ||
+    category.startsWith("Household:")
+  );
+}
+
+interface UsualSharing {
+  personIds: string[];
+  displayNames: string[];
+  count: number;
+}
+
+/**
+ * Per-counterparty most-frequent shared_with set, across all history. If a
+ * user has split Blinkit with [rahul, shivam] 5 times before, the next
+ * Blinkit suggestion is the same trio. Min support = 2 to avoid one-offs.
+ */
+function computeUsualSharing(): Map<string, UsualSharing> {
+  const rows = db().all<{ counterparty: string; shared_with: string; n: number }>(sql`
+    SELECT counterparty, shared_with, count(*) AS n
+    FROM transactions
+    WHERE counterparty IS NOT NULL AND shared_with IS NOT NULL AND shared_with != ''
+    GROUP BY counterparty, shared_with
+  `);
+  const byCounterparty = new Map<string, UsualSharing>();
+  for (const r of rows) {
+    if (r.n < 2) continue;
+    const personIds = r.shared_with.split(",").map((s) => s.trim()).filter(Boolean);
+    if (personIds.length === 0) continue;
+    const existing = byCounterparty.get(r.counterparty);
+    if (!existing || existing.count < r.n) {
+      const displayNames = personIds.map(
+        (id) =>
+          DEFAULT_PEOPLE.find((p) => p.id === id)?.displayName?.split(" ")[0] ?? id,
+      );
+      byCounterparty.set(r.counterparty, { personIds, displayNames, count: r.n });
+    }
+  }
+  return byCounterparty;
+}
+
+interface IncomingMap {
+  /** Map of personId → array of [date, amount] tuples, sorted by date asc. */
+  byPerson: Map<string, { date: string; amount: number }[]>;
+}
+
+function computeIncomingsByPersonByDate(): IncomingMap {
+  const rows = db().all<{ person_id: string; date: string; amount: number }>(sql`
+    SELECT person_id, txn_date AS date, deposit AS amount
+    FROM transactions
+    WHERE person_id IS NOT NULL AND deposit IS NOT NULL AND deposit > 0
+    ORDER BY txn_date ASC
+  `);
+  const byPerson = new Map<string, { date: string; amount: number }[]>();
+  for (const r of rows) {
+    const arr = byPerson.get(r.person_id) ?? [];
+    arr.push({ date: r.date, amount: Number(r.amount) });
+    byPerson.set(r.person_id, arr);
+  }
+  return { byPerson };
+}
+
+/**
+ * Heuristic: did this person return at least `amount × 0.8` to me within 14
+ * days of `outgoingDate`? If yes, the chase-up is probably already settled.
+ * The 80% threshold permits "rounded down" reimbursements (paid back ₹500
+ * for a ₹520 expense).
+ */
+function hasMatchingReturnInflow(
+  personId: string,
+  outgoingDate: string,
+  outgoingAmount: number,
+  incoming: IncomingMap,
+): boolean {
+  const events = incoming.byPerson.get(personId) ?? [];
+  const outDate = new Date(outgoingDate + "T00:00:00Z").getTime();
+  const fourteenDays = 14 * 86400 * 1000;
+  for (const e of events) {
+    const eDate = new Date(e.date + "T00:00:00Z").getTime();
+    if (eDate < outDate) continue;
+    if (eDate - outDate > fourteenDays) break;
+    if (e.amount >= outgoingAmount * 0.8) return true;
+  }
+  return false;
+}
+
+// ============================================================================
+// FRIENDS — Splitwise-style settlement
+// ============================================================================
+//
+// Two flows compose into a per-friend net balance:
+//   1. Direct UPI: every outgoing to F adds to "F owes you"; every incoming
+//      from F subtracts. This already works without any marking — straight
+//      from person_id on the canonical ledger.
+//   2. Shared expenses: when you mark a withdrawal as shared with N people
+//      (yourself + N-1 friends), each of those friends owes you
+//      withdrawal / share_count.
+//
+// Convention: positive net = friend owes you, negative = you owe them.
+
+export interface FriendOverviewRow {
+  personId: string;
+  displayName: string;
+  relationship: string;
+  /** Number of canonical transactions where this person is the counterparty. */
+  directTxnCount: number;
+  /** Direct outgoing UPIs you've sent to them. */
+  directOut: number;
+  /** Direct incoming UPIs they've sent you. */
+  directIn: number;
+  /** Number of shared transactions where this person is in `shared_with`. */
+  sharedTxnCount: number;
+  /** Their share of all shared expenses you've marked: Σ(amount / share_count). */
+  sharedOwed: number;
+  /** Net: positive = they owe you, negative = you owe them. */
+  net: number;
+  lastTxnDate: string | null;
+}
+
+/**
+ * One row per known person with the full settlement breakdown. Both flows
+ * are aggregated in a single pass over the transactions table so the
+ * dashboard's /friends view renders in one query.
+ */
+export async function getFriendsOverview(): Promise<FriendOverviewRow[]> {
+  // Direct flows (per person_id).
+  const directRows = db().all<{
+    person_id: string;
+    n: number;
+    total_out: number | null;
+    total_in: number | null;
+    last_date: string | null;
+  }>(sql`
+    SELECT
+      person_id,
+      count(*)                              AS n,
+      coalesce(sum(withdrawal), 0)          AS total_out,
+      coalesce(sum(deposit), 0)             AS total_in,
+      max(txn_date)                         AS last_date
+    FROM transactions
+    WHERE person_id IS NOT NULL
+    GROUP BY person_id
+  `);
+
+  // Shared-expense flows. Each shared row contributes amount/share_count to
+  // every person id in its `shared_with` CSV. We unroll this in code rather
+  // than SQL since SQLite has no native string_split.
+  const sharedRows = db().all<{
+    id: number;
+    withdrawal: number;
+    share_count: number;
+    shared_with: string;
+  }>(sql`
+    SELECT id, withdrawal, share_count, shared_with
+    FROM transactions
+    WHERE shared_with IS NOT NULL
+      AND shared_with != ''
+      AND withdrawal IS NOT NULL
+      AND withdrawal > 0
+      AND share_count > 1
+  `);
+
+  const sharedAgg = new Map<string, { count: number; total: number }>();
+  for (const r of sharedRows) {
+    const others = r.shared_with.split(",").map((s) => s.trim()).filter(Boolean);
+    const perHead = r.withdrawal / r.share_count;
+    for (const pid of others) {
+      const cur = sharedAgg.get(pid) ?? { count: 0, total: 0 };
+      cur.count += 1;
+      cur.total += perHead;
+      sharedAgg.set(pid, cur);
+    }
+  }
+
+  // Merge by personId. Build a union of all person_ids seen in either flow.
+  const allPids = new Set<string>([
+    ...directRows.map((r) => r.person_id),
+    ...sharedAgg.keys(),
+  ]);
+  const out: FriendOverviewRow[] = [];
+  for (const pid of allPids) {
+    const direct = directRows.find((r) => r.person_id === pid);
+    const shared = sharedAgg.get(pid) ?? { count: 0, total: 0 };
+    const person = DEFAULT_PEOPLE.find((p) => p.id === pid);
+    const directOut = Number(direct?.total_out ?? 0);
+    const directIn = Number(direct?.total_in ?? 0);
+    out.push({
+      personId: pid,
+      displayName: person?.displayName ?? pid,
+      relationship: person?.relationship ?? "other",
+      directTxnCount: direct?.n ?? 0,
+      directOut,
+      directIn,
+      sharedTxnCount: shared.count,
+      sharedOwed: shared.total,
+      // Owes-you = direct outgoing + their share - direct incoming.
+      net: directOut + shared.total - directIn,
+      lastTxnDate: direct?.last_date ?? null,
+    });
+  }
+  // Show biggest absolute balances first so the most actionable rows are up top.
+  return out.sort((a, b) => Math.abs(b.net) - Math.abs(a.net));
+}
+
+export interface FriendDetail {
+  person: FriendOverviewRow;
+  /** Direct transactions (UPIs to/from this person, regardless of shared marker). */
+  directTxns: DrillDownTxn[];
+  /** Shared transactions where this person is in the shared_with CSV. */
+  sharedTxns: (DrillDownTxn & { shareCount: number; sharedWith: string[]; perHead: number })[];
+}
+
+export async function getFriendDetail(personId: string): Promise<FriendDetail | null> {
+  if (!/^[a-z][a-z0-9-]*$/i.test(personId)) return null;
+
+  // Reuse the overview to get aggregates (one row).
+  const all = await getFriendsOverview();
+  const person = all.find((p) => p.personId === personId);
+  if (!person) return null;
+
+  // Direct txns (this person is counterparty).
+  const direct = db().all<{
+    id: number;
+    txn_date: string;
+    txn_time: string | null;
+    counterparty: string | null;
+    narration: string | null;
+    counterparty_kind: string | null;
+    withdrawal: number | null;
+    deposit: number | null;
+    category: string | null;
+    bank: string;
+    type: string;
+    last4: string;
+  }>(sql`
+    SELECT t.id, t.txn_date, t.txn_time, t.counterparty, t.narration,
+           t.counterparty_kind, t.withdrawal, t.deposit, t.category,
+           a.bank, a.type, a.last4
+    FROM transactions t
+    JOIN accounts a ON a.id = t.account_id
+    WHERE t.person_id = ${personId}
+    ORDER BY t.txn_date DESC, coalesce(t.txn_time, '00:00') DESC, t.id DESC
+  `);
+
+  // Shared txns. Match `shared_with` against this personId — we use LIKE
+  // anchored against CSV boundaries to avoid 'rahul' matching 'rahul-d'.
+  const likeNeedle = `%${personId}%`;
+  const sharedRaw = db().all<{
+    id: number;
+    txn_date: string;
+    txn_time: string | null;
+    counterparty: string | null;
+    narration: string | null;
+    counterparty_kind: string | null;
+    withdrawal: number | null;
+    deposit: number | null;
+    category: string | null;
+    bank: string;
+    type: string;
+    last4: string;
+    share_count: number;
+    shared_with: string;
+  }>(sql`
+    SELECT t.id, t.txn_date, t.txn_time, t.counterparty, t.narration,
+           t.counterparty_kind, t.withdrawal, t.deposit, t.category,
+           a.bank, a.type, a.last4,
+           t.share_count, t.shared_with
+    FROM transactions t
+    JOIN accounts a ON a.id = t.account_id
+    WHERE t.shared_with LIKE ${likeNeedle}
+    ORDER BY t.txn_date DESC, coalesce(t.txn_time, '00:00') DESC, t.id DESC
+  `);
+  // Defensive in-code filter: confirm exact CSV membership.
+  const sharedTxns = sharedRaw
+    .map((r) => {
+      const sharedWith = r.shared_with.split(",").map((s) => s.trim()).filter(Boolean);
+      if (!sharedWith.includes(personId)) return null;
+      const perHead = (r.withdrawal ?? 0) / r.share_count;
+      return {
+        id: r.id,
+        txnDate: r.txn_date,
+        txnTime: r.txn_time,
+        counterparty: r.counterparty,
+        narration: r.narration,
+        counterpartyKind: r.counterparty_kind,
+        withdrawal: r.withdrawal,
+        deposit: r.deposit,
+        category: r.category,
+        accountBank: r.bank,
+        accountType: r.type,
+        accountLast4: r.last4,
+        shareCount: r.share_count,
+        sharedWith,
+        perHead,
+      };
+    })
+    .filter((x): x is NonNullable<typeof x> => x !== null);
+
+  return {
+    person,
+    directTxns: direct.map((r) => ({
+      id: r.id,
+      txnDate: r.txn_date,
+      txnTime: r.txn_time,
+      counterparty: r.counterparty,
+      narration: r.narration,
+      counterpartyKind: r.counterparty_kind,
+      withdrawal: r.withdrawal,
+      deposit: r.deposit,
+      category: r.category,
+      accountBank: r.bank,
+      accountType: r.type,
+      accountLast4: r.last4,
+    })),
+    sharedTxns,
+  };
+}
+
+/**
+ * Candidates for splitting: high-spend "shareable-shape" transactions that
+ * aren't already marked as shared. Used by /friends to nudge the user
+ * toward marking up their backlog without them having to scroll the whole
+ * recent list.
+ *
+ * Heuristic: outgoing, amount ≥ ₹500, category is in a "splittable" set
+ * (food / travel / groceries), and shared_with is null/empty.
+ */
+export interface CandidateShare {
+  id: number;
+  txnDate: string;
+  txnTime: string | null;
+  counterparty: string | null;
+  narration: string | null;
+  amount: number;
+  category: string | null;
+  /** A hint built from amount + category: 'big-food', 'big-travel', etc. */
+  hint: string;
+}
+
+export async function getCandidateShares(limit = 20): Promise<CandidateShare[]> {
+  const rows = db().all<{
+    id: number;
+    txn_date: string;
+    txn_time: string | null;
+    counterparty: string | null;
+    narration: string | null;
+    withdrawal: number;
+    category: string | null;
+  }>(sql`
+    SELECT id, txn_date, txn_time, counterparty, narration, withdrawal, category
+    FROM transactions
+    WHERE withdrawal IS NOT NULL
+      AND withdrawal >= 500
+      AND (shared_with IS NULL OR shared_with = '')
+      AND category IS NOT NULL
+      AND (
+        category LIKE 'Food:%'
+        OR category LIKE 'Travel:%'
+        OR category LIKE 'Entertainment:%'
+        OR category = 'Food:Quick Commerce'
+      )
+    ORDER BY withdrawal DESC
+    LIMIT ${limit}
+  `);
+  return rows.map((r) => ({
+    id: r.id,
+    txnDate: r.txn_date,
+    txnTime: r.txn_time,
+    counterparty: r.counterparty,
+    narration: r.narration,
+    amount: Number(r.withdrawal),
+    category: r.category,
+    hint: hintFor(r.category, Number(r.withdrawal)),
+  }));
+}
+
+function hintFor(category: string | null, amount: number): string {
+  if (!category) return "splittable";
+  if (category.startsWith("Travel:")) return amount >= 5000 ? "trip-cost" : "transport";
+  if (category.startsWith("Food:Quick Commerce")) return "groceries";
+  if (category.startsWith("Food:")) return amount >= 1500 ? "group-meal" : "food";
+  if (category.startsWith("Entertainment:")) return "outing";
+  return "splittable";
 }
 
 // ============================================================================

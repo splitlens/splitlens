@@ -1,13 +1,22 @@
 import type { RecentTxn } from "@/lib/repo";
 import { fmtInr, fmtDate } from "@/lib/format";
 import { KindBadge } from "./TopCounterparties";
+import { ShareTxnButton } from "@/components/friends/ShareTxnButton";
+import type { PersonOption } from "@/components/friends/ShareTxnModal";
 
 /**
  * The last N transactions. Prefers the clean `counterparty` over raw bank
- * narration. Shows the kind badge and a multi-source indicator dot when more
- * than one source has observed this row.
+ * narration. Shows the kind badge, a multi-source indicator dot when more
+ * than one source has observed this row, and a per-row "Split…" button for
+ * outgoing transactions so any txn can be flagged as a shared expense.
  */
-export function RecentTxnsCard({ txns }: { txns: RecentTxn[] }) {
+export function RecentTxnsCard({
+  txns,
+  people,
+}: {
+  txns: RecentTxn[];
+  people: PersonOption[];
+}) {
   if (txns.length === 0) {
     return (
       <div className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 p-5 shadow-sm">
@@ -32,6 +41,7 @@ export function RecentTxnsCard({ txns }: { txns: RecentTxn[] }) {
               <th className="pb-2">Category</th>
               <th className="pb-2 text-right">Out</th>
               <th className="pb-2 text-right">In</th>
+              <th className="pb-2 text-right"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
@@ -82,6 +92,22 @@ export function RecentTxnsCard({ txns }: { txns: RecentTxn[] }) {
                   </td>
                   <td className="py-2 align-top text-right tabular-nums text-emerald-700">
                     {t.deposit != null ? fmtInr(t.deposit) : ""}
+                  </td>
+                  <td className="py-2 align-top text-right">
+                    <ShareTxnButton
+                      txn={{
+                        id: t.id,
+                        txnDate: t.txnDate,
+                        txnTime: t.txnTime,
+                        withdrawal: t.withdrawal,
+                        counterparty: t.counterparty,
+                        narration: t.narration,
+                        category: t.category,
+                        initialSharedWith: t.sharedWith,
+                      }}
+                      people={people}
+                      isShared={t.sharedWith.length > 0}
+                    />
                   </td>
                 </tr>
               );

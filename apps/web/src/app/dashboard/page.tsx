@@ -10,6 +10,7 @@ import {
   getAutopayPairs,
   getCategoryTree,
 } from "@/lib/repo";
+import { listKnownPeople } from "@/app/friends/actions";
 
 import { KpiTiles } from "@/components/dashboard/KpiTiles";
 import { TimeHeatmap } from "@/components/dashboard/TimeHeatmap";
@@ -43,6 +44,7 @@ export default async function DashboardPage() {
     autopay,
     categoryTree,
     recent,
+    knownPeople,
   ] = await Promise.all([
     getDashboardSummary(),
     getAccountsWithSummary(),
@@ -54,6 +56,7 @@ export default async function DashboardPage() {
     getAutopayPairs(),
     getCategoryTree(),
     getRecentTransactions(100),
+    listKnownPeople(),
   ]);
 
   if (summary.txnCount === 0) {
@@ -127,7 +130,7 @@ export default async function DashboardPage() {
       </div>
 
       {/* Recent transactions */}
-      <RecentTxnsCard txns={recent} />
+      <RecentTxnsCard txns={recent} people={knownPeople} />
     </main>
   );
 }

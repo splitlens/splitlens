@@ -24,6 +24,7 @@ import {
   categorize,
   DEFAULT_RULES,
   identifyPerson,
+  identifyPersonByName,
   DEFAULT_PEOPLE,
 } from "@splitlens/core";
 import type { CcParseResult, CcRawTransaction } from "@splitlens/core";
@@ -173,7 +174,9 @@ export function writeHdfcCcIngest(
 
 function ccRowToCanonical(t: CcRawTransaction, accountId: number) {
   const { category, matchedRule } = categorize(t.description, DEFAULT_RULES);
-  const person = identifyPerson(t.description, DEFAULT_PEOPLE);
+  const person =
+    identifyPerson(t.description, DEFAULT_PEOPLE) ??
+    identifyPersonByName(t.description, DEFAULT_PEOPLE);
   return {
     accountId,
     txnDate: t.txnDate,
