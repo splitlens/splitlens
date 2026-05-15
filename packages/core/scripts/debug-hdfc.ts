@@ -9,8 +9,8 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
-import { parseHdfcSavingsPages, type ExtractedPage, type PdfWord } from "../src/index.js";
-import { clusterLines, findHeaderColumns } from "../src/parsers/hdfc-savings.js";
+import { parseHdfcSavingsPages, type ExtractedPage, type PdfWord } from "../src/index";
+import { clusterLines, findHeaderColumns } from "../src/parsers/hdfc-savings";
 
 const [, , pdfPathArg, password] = process.argv;
 if (!pdfPathArg) {

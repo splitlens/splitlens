@@ -3,7 +3,7 @@
  *
  * v1 ruleset (95+ rules) lives at ~/finance/src/rules.yaml in the prototype.
  */
-import type { RawTransaction } from "../types/index.js";
+import type { RawTransaction } from "../types/index";
 
 export interface CategoryRule {
   /** Regex pattern matched against transaction narration (case-insensitive). */

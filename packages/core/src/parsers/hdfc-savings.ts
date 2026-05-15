@@ -20,8 +20,8 @@ import type {
   ParsedStatement,
   PdfWord,
   RawTransaction,
-} from "../types/index.js";
-import type { ParseOptions } from "./index.js";
+} from "../types/index";
+import type { ParseOptions } from "./index";
 
 /** Footer y-cutoff: words below this on each page are page footer (bank GSTN/address). */
 const FOOTER_Y_CUTOFF = 770;

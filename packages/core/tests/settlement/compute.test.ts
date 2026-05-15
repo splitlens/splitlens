@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { computeSettlement } from "../../src/settlement/index.js";
-import type { Person, RawTransaction, SharedTransaction } from "../../src/types/index.js";
+import { computeSettlement } from "../../src/settlement/index";
+import type { Person, RawTransaction, SharedTransaction } from "../../src/types/index";
 
 const RAHUL: Person = {
   id: "rahul",

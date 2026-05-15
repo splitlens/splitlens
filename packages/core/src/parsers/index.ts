@@ -6,7 +6,7 @@
  *
  * v1 parsers shipped: HDFC savings, HDFC credit card (v1.3 + v1.6 layouts).
  */
-import type { ExtractedPage, ParseResult } from "../types/index.js";
+import type { ExtractedPage, ParseResult } from "../types/index";
 
 export interface ParseOptions {
   password?: string;
@@ -25,5 +25,5 @@ export interface ParseOptions {
 /** Stub that future parsers will conform to. */
 export type Parser = (pdf: Uint8Array, opts?: ParseOptions) => Promise<ParseResult>;
 
-export { parseHdfcSavings, parseHdfcSavingsPages } from "./hdfc-savings.js";
-export { parseHdfcCc, parseHdfcCcText } from "./hdfc-cc.js";
+export { parseHdfcSavings, parseHdfcSavingsPages } from "./hdfc-savings";
+export { parseHdfcCc, parseHdfcCcText } from "./hdfc-cc";

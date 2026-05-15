@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { parseHdfcCc, parseHdfcCcText } from "../../src/parsers/hdfc-cc.js";
+import { parseHdfcCc, parseHdfcCcText } from "../../src/parsers/hdfc-cc";
 import {
   V13_AUG_2024_PAGE1,
   V16_APR_2026_PAGE1,
   V16_APR_2026_PAGE2,
-} from "./fixtures/hdfc-cc.fixture.js";
+} from "./fixtures/hdfc-cc.fixture";
 
 describe("parseHdfcCc — Uint8Array entry point", () => {
   it("returns empty result when no extractor is supplied", async () => {

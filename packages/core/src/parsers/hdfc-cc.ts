@@ -13,8 +13,8 @@
  * Faithful port of the Python prototype at ~/finance/src/cc_extract.py.
  */
 
-import type { CcParseResult, CcRawTransaction, CcStatement } from "../types/index.js";
-import type { ParseOptions } from "./index.js";
+import type { CcParseResult, CcRawTransaction, CcStatement } from "../types/index";
+import type { ParseOptions } from "./index";
 
 // === v1.6 format (late 2025+) ===
 // Full line: DD/MM/YYYY[ |] HH:MM DESCRIPTION [+ rewards] C amount [trailing 'l']

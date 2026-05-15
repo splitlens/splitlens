@@ -4,7 +4,7 @@ import type {
   SettlementEntry,
   RawTransaction,
   SharedTransaction,
-} from "../types/index.js";
+} from "../types/index";
 
 /**
  * Compute net settlement per person from shared expenses + repayment inflows.

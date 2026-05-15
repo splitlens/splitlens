@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { categorize, categorizeMany } from "../../src/rules/index.js";
-import type { CategoryRule } from "../../src/rules/index.js";
+import { categorize, categorizeMany } from "../../src/rules/index";
+import type { CategoryRule } from "../../src/rules/index";
 
 const SAMPLE_RULES: CategoryRule[] = [
   { pattern: "NEFTCR-CHAS|CISCOSYSTEMS", category: "Income:Salary (Cisco)", priority: 10 },

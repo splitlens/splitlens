@@ -4,13 +4,13 @@ import {
   parseHdfcSavingsPages,
   clusterLines,
   findHeaderColumns,
-} from "../../src/parsers/hdfc-savings.js";
-import type { ExtractedPage } from "../../src/types/index.js";
+} from "../../src/parsers/hdfc-savings";
+import type { ExtractedPage } from "../../src/types/index";
 import {
   fixtureOnePageFiveTxns,
   fixtureTwoPages,
   fixtureEmptyPage,
-} from "./fixtures/hdfc-savings.fixture.js";
+} from "./fixtures/hdfc-savings.fixture";
 
 describe("HDFC savings parser — Uint8Array entry point", () => {
   it("returns empty result for empty PDF when no extractor is supplied", async () => {

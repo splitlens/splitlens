@@ -12,7 +12,7 @@
  *   Header row at top=233.6
  *   Footer "*Closingbalance..." at top=794.9 (filtered out by FOOTER_Y_CUTOFF=770)
  */
-import type { ExtractedPage, PdfWord } from "../../../src/types/index.js";
+import type { ExtractedPage, PdfWord } from "../../../src/types/index";
 
 function w(
   text: string,
