@@ -461,7 +461,7 @@ function Stat({
       <div className="text-xs uppercase tracking-wider text-[color:var(--color-muted)]">
         {label}
       </div>
-      <div className={`mt-1 text-3xl font-bold ${color}`}>{value}</div>
+      <div className={`mt-1 text-3xl font-bold tabular-nums ${color}`}>{value}</div>
     </div>
   );
 }

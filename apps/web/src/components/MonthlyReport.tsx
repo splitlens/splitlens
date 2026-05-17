@@ -278,7 +278,7 @@ function Kpi({
       <div className="truncate text-xs uppercase tracking-wider text-[color:var(--color-muted)]">
         {label}
       </div>
-      <div className={`mt-1 text-2xl font-bold ${color}`}>{value}</div>
+      <div className={`mt-1 text-2xl font-bold tabular-nums ${color}`}>{value}</div>
       {sub && <div className="mt-0.5 text-xs text-[color:var(--color-muted)]">{sub}</div>}
     </div>
   );

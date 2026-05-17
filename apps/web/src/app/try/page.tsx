@@ -336,7 +336,7 @@ function Stat({
       <div className="text-xs uppercase tracking-wider text-[color:var(--color-muted)]">
         {label}
       </div>
-      <div className={`mt-1 text-2xl font-bold ${color}`}>{fmtInr === undefined ? "" : value}</div>
+      <div className={`mt-1 text-2xl font-bold tabular-nums ${color}`}>{fmtInr === undefined ? "" : value}</div>
     </div>
   );
 }
