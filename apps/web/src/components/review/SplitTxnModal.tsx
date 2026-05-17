@@ -44,17 +44,6 @@ import {
   countOtherUnreviewedForMerchant,
 } from "@/app/review/actions";
 
-const RECURRENCE_OPTIONS: Array<{
-  id: "one_time" | "monthly" | "weekly" | "quarterly" | "yearly";
-  label: string;
-}> = [
-  { id: "one_time", label: "one-time" },
-  { id: "weekly", label: "weekly" },
-  { id: "monthly", label: "monthly" },
-  { id: "quarterly", label: "quarterly" },
-  { id: "yearly", label: "yearly" },
-];
-
 export function SplitTxnModal({
   row,
   people,
@@ -80,18 +69,11 @@ export function SplitTxnModal({
   positionTotal: number;
 }) {
   // Local form state — initialized from the row's current values.
+  // Recurrence lives in the categorization modal (InboxModal at
+  // /review/category), not here — splitting is about *who paid* and
+  // *who owes what*, not about cadence.
   const [sharedWith, setSharedWith] = useState<string[]>([]);
   const [shareCount, setShareCount] = useState<number>(1);
-  const [recurrence, setRecurrence] = useState<
-    "one_time" | "monthly" | "weekly" | "quarterly" | "yearly"
-  >(
-    row.recurrence === "monthly" ||
-      row.recurrence === "weekly" ||
-      row.recurrence === "quarterly" ||
-      row.recurrence === "yearly"
-      ? row.recurrence
-      : "one_time",
-  );
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -103,14 +85,6 @@ export function SplitTxnModal({
   useEffect(() => {
     setSharedWith([]);
     setShareCount(1);
-    setRecurrence(
-      row.recurrence === "monthly" ||
-        row.recurrence === "weekly" ||
-        row.recurrence === "quarterly" ||
-        row.recurrence === "yearly"
-        ? row.recurrence
-        : "one_time",
-    );
     setErr(null);
     setApplyRule(true);
     let cancelled = false;
@@ -120,7 +94,7 @@ export function SplitTxnModal({
     return () => {
       cancelled = true;
     };
-  }, [row.id, row.counterparty, row.recurrence]);
+  }, [row.id, row.counterparty]);
 
   const split = shareCount > 1 || sharedWith.length > 0;
   const ways = Math.max(shareCount, sharedWith.length + 1, split ? 2 : 1);
@@ -159,7 +133,6 @@ export function SplitTxnModal({
       const update = await updateTransaction(row.id, {
         sharedWith: split ? sharedWith : null,
         shareCount: split ? shareCount : 1,
-        recurrence: recurrence === "one_time" ? null : recurrence,
         ...(alsoReviewed ? { markReviewed: true } : {}),
       });
       if (!update.ok) {
@@ -167,33 +140,18 @@ export function SplitTxnModal({
         setErr(update.error);
         return;
       }
-      // Bulk-apply rule if the user kept the checkbox + there are
-      // siblings. Only sends the dimensions that actually changed
-      // vs the row's original.
-      if (applyRule && otherCount > 0) {
-        const recurrenceChanged =
-          (row.recurrence ?? "one_time") !== recurrence;
-        const shareChanged = split; // anything non-trivial is a change here
-        if (recurrenceChanged || shareChanged) {
-          const bulk = await applyMerchantRule(row.counterparty, {
-            ...(recurrenceChanged
-              ? {
-                  recurrence:
-                    recurrence === "one_time" ? null : recurrence,
-                }
-              : {}),
-            ...(shareChanged
-              ? {
-                  sharedWith: split ? sharedWith : null,
-                  shareCount: split ? shareCount : 1,
-                }
-              : {}),
-          });
-          if (!bulk.ok) {
-            setSaving(false);
-            setErr(`Saved this txn but rule failed: ${bulk.error}`);
-            return;
-          }
+      // Bulk-apply share rule if the user kept the checkbox + there
+      // are siblings. Split-only: this modal doesn't touch recurrence
+      // (that's the category modal's job).
+      if (applyRule && otherCount > 0 && split) {
+        const bulk = await applyMerchantRule(row.counterparty, {
+          sharedWith: split ? sharedWith : null,
+          shareCount: split ? shareCount : 1,
+        });
+        if (!bulk.ok) {
+          setSaving(false);
+          setErr(`Saved this txn but rule failed: ${bulk.error}`);
+          return;
         }
       }
       setSaving(false);
@@ -202,11 +160,9 @@ export function SplitTxnModal({
     [
       row.id,
       row.counterparty,
-      row.recurrence,
       sharedWith,
       shareCount,
       split,
-      recurrence,
       applyRule,
       otherCount,
       onAfterSave,
@@ -525,54 +481,8 @@ export function SplitTxnModal({
               )}
             </div>
 
-            {/* Recurrence */}
-            <div>
-              <span className="eyebrow">How often</span>
-              <div
-                className="flex"
-                style={{
-                  background: "var(--surface-2)",
-                  border: "1px solid var(--border)",
-                  borderRadius: 8,
-                  padding: 3,
-                  gap: 2,
-                  marginTop: 6,
-                }}
-              >
-                {RECURRENCE_OPTIONS.map((o) => (
-                  <button
-                    key={o.id}
-                    type="button"
-                    onClick={() => setRecurrence(o.id)}
-                    style={{
-                      flex: 1,
-                      padding: "6px 10px",
-                      background:
-                        recurrence === o.id
-                          ? "var(--surface)"
-                          : "transparent",
-                      border:
-                        recurrence === o.id
-                          ? "1px solid var(--border-strong)"
-                          : "1px solid transparent",
-                      borderRadius: 6,
-                      color:
-                        recurrence === o.id
-                          ? "var(--fg)"
-                          : "var(--muted)",
-                      fontSize: 12.5,
-                      fontFamily: "inherit",
-                      cursor: "pointer",
-                    }}
-                  >
-                    {o.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
             {/* Bulk rule offer */}
-            {otherCount > 0 && (split || recurrence !== (row.recurrence ?? "one_time")) && (
+            {otherCount > 0 && split && (
               <button
                 type="button"
                 onClick={() => setApplyRule((v) => !v)}
