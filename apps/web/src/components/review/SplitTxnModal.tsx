@@ -384,10 +384,10 @@ export function SplitTxnModal({
   const setJustMe = useCallback(() => {
     setSharedWith([]);
     setShareCount(1);
-    // Exiting split mode closes the friend picker too — leaving it
-    // open with no chips visible (split=false hides the chip grid)
-    // would be a dead-end state.
+    // Exiting split mode closes the friend picker AND the SplitPane
+    // — both are about configuring a split that no longer exists.
     setActivePicker((cur) => (cur === "friend" ? null : cur));
+    setRightPane((cur) => (cur === "split" ? null : cur));
   }, []);
 
   const save = useCallback(
@@ -531,9 +531,11 @@ export function SplitTxnModal({
         if (e.key === "f" || e.key === "F") {
           e.preventDefault();
           // Entering friend picker bumps the way to at least 2 so
-          // the chip grid renders.
+          // the chip grid renders. Also ensures the SplitPane is
+          // open since the chips now live inside it.
           setShareCount((cur) => Math.max(cur, 2));
           setActivePicker((cur) => (cur === "friend" ? null : "friend"));
+          setRightPane((cur) => (cur === "split" ? cur : "split"));
           return;
         }
         // 2-9 set the way (number of total people in the split).
@@ -611,11 +613,14 @@ export function SplitTxnModal({
         e.preventDefault();
         setActivePicker("merchant");
       } else if (e.key === "f" || e.key === "F") {
-        // F enters split mode (with a default 2-way) and opens the
-        // friend picker so the user can immediately pick who to
-        // split with — one keystroke "activate splitting".
+        // F enters split mode (with a default 2-way), opens the
+        // SplitPane (where the participant chips now live), and
+        // sets the keyboard highlight to "friend" so ↑/↓/Enter
+        // work on the chips immediately. One keystroke = "activate
+        // splitting + put me in friend-pick mode".
         e.preventDefault();
         setShareCount((cur) => Math.max(cur, 2));
+        setRightPane("split");
         setActivePicker("friend");
       } else if (/^[2-9]$/.test(e.key)) {
         // Number keys set the N-way split count. We don't auto-open
@@ -1025,8 +1030,11 @@ export function SplitTxnModal({
                 <button
                   type="button"
                   onClick={() => {
+                    // First time entering split mode: seed with the
+                    // suggested friend (or the most-frequent contact
+                    // if no suggestion) so the pane opens with at
+                    // least one participant to work with.
                     if (!split) {
-                      // Default to suggested or first known person
                       const target =
                         row.suggestedSplitWith ??
                         sortedPeople[0]?.displayName;
@@ -1035,6 +1043,12 @@ export function SplitTxnModal({
                         setShareCount(2);
                       }
                     }
+                    // Always open the SplitPane — all participant
+                    // management lives there now (chips below the
+                    // toggle were retired in favor of the pane). The
+                    // toggle is a "switch on splitting + show me the
+                    // configurator" affordance, not a chip-reveal.
+                    setRightPane("split");
                   }}
                   style={{
                     flex: 1,
@@ -1053,90 +1067,13 @@ export function SplitTxnModal({
                   Split with friends
                 </button>
               </div>
-              {split && (
-                <>
-                  {activePicker === "friend" && (
-                    <div
-                      role="status"
-                      aria-live="polite"
-                      style={{
-                        marginBottom: 6,
-                        padding: "4px 8px",
-                        background: "var(--accent-soft)",
-                        border: "1px solid var(--accent-line)",
-                        borderRadius: 6,
-                        color: "var(--accent)",
-                        fontSize: 11.5,
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 8,
-                      }}
-                    >
-                      <Ico name="users" size={11} />
-                      <span style={{ flex: 1 }}>
-                        Friend picker · <span className="kbd">↑</span>/<span className="kbd">↓</span> nav ·{" "}
-                        <span className="kbd">↵</span> toggle ·{" "}
-                        <span className="kbd">2</span>–<span className="kbd">9</span> way ·{" "}
-                        <span className="kbd">Esc</span> close
-                      </span>
-                      <span className="mono tabular" style={{ color: "var(--accent)" }}>
-                        {ways}-way · {sharedWith.length} named
-                      </span>
-                    </div>
-                  )}
-                  <div
-                    style={{
-                      display: "flex",
-                      flexWrap: "wrap",
-                      gap: 6,
-                    }}
-                  >
-                    {sortedPeople.map((p, i) => {
-                      const on = sharedWith.includes(p.displayName);
-                      const isFocused =
-                        activePicker === "friend" && i === pickerIndex;
-                      return (
-                        <button
-                          key={p.id}
-                          type="button"
-                          onClick={() => toggleFriend(p.displayName)}
-                          onMouseEnter={() => {
-                            // Mirror category/merchant picker behavior:
-                            // mouse hover moves the keyboard highlight
-                            // so mouse + keyboard mix cleanly.
-                            if (activePicker === "friend") setPickerIndex(i);
-                          }}
-                          className="chip"
-                          style={{
-                            background: on
-                              ? "var(--accent-soft)"
-                              : "transparent",
-                            borderColor: on
-                              ? "var(--accent-line)"
-                              : "var(--border)",
-                            color: on ? "var(--accent)" : "var(--fg-2)",
-                            cursor: "pointer",
-                            fontFamily: "inherit",
-                            // Focus ring: a stronger accent outline
-                            // around the keyboard-highlighted chip.
-                            // Uses box-shadow so it sits outside the
-                            // existing border without shifting layout.
-                            boxShadow: isFocused
-                              ? "0 0 0 2px var(--accent)"
-                              : undefined,
-                            outline: "none",
-                            transition:
-                              "box-shadow 140ms var(--ease-out), background 140ms var(--ease-out)",
-                          }}
-                        >
-                          {on && <Ico name="check" size={11} />}
-                          {p.displayName}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </>
-              )}
+              {/* Chip grid + friend-picker banner are NOT rendered here
+                  anymore. All participant management — adding friends,
+                  removing, keyboard-picking, the live N-way · M named
+                  status — moved into the SplitPane (the slide-out
+                  drawer to the right). The "Split with friends" toggle
+                  above + the X-way badge open that pane; the F shortcut
+                  jumps straight into friend-pick mode within it. */}
               {split && row.direction === "debit" && (
                 <div
                   className="small"
@@ -1312,9 +1249,11 @@ export function SplitTxnModal({
                             setSplitEntries={setSplitEntries}
                             paidBy={paidBy}
                             setPaidBy={setPaidBy}
-                            onOpenFriendPicker={() =>
-                              setActivePicker("friend")
-                            }
+                            allFriends={sortedPeople}
+                            toggleFriend={toggleFriend}
+                            activePicker={activePicker}
+                            pickerIndex={pickerIndex}
+                            setPickerIndex={setPickerIndex}
                             onClose={() => setRightPane(null)}
                           />
                         </motion.div>
@@ -2209,7 +2148,11 @@ function SplitPane({
   setSplitEntries,
   paidBy,
   setPaidBy,
-  onOpenFriendPicker,
+  allFriends,
+  toggleFriend,
+  activePicker,
+  pickerIndex,
+  setPickerIndex,
   onClose,
 }: {
   totalAmount: number;
@@ -2221,7 +2164,25 @@ function SplitPane({
   setSplitEntries: React.Dispatch<React.SetStateAction<Map<string, number>>>;
   paidBy: string | null;
   setPaidBy: (p: string | null) => void;
-  onOpenFriendPicker: () => void;
+  /** Full friend list, sorted by txn count desc — used to render the
+   *  "Add friends" chip grid inside this pane (was previously in the
+   *  form body; all participant management lives here now). */
+  allFriends: Array<{
+    id: string;
+    displayName: string;
+    relationship: string;
+    txnCount: number;
+  }>;
+  /** Toggle a friend in/out of the active split's participant list.
+   *  Same logic as before — adding bumps shareCount via Math.max, never
+   *  reduces. */
+  toggleFriend: (displayName: string) => void;
+  /** When "friend", the chip at pickerIndex gets a keyboard focus ring
+   *  and ↑/↓ navigation. Other values mean the friend picker isn't the
+   *  keyboard target. */
+  activePicker: PickerDim | null;
+  pickerIndex: number;
+  setPickerIndex: (i: number) => void;
   onClose: () => void;
 }) {
   // "You" is the implicit user; remaining slots are named friends.
@@ -2521,28 +2482,65 @@ function SplitPane({
             );
           })}
 
-          {/* Add-friend action — opens the existing friend picker so
-              the user can extend the participant list without
-              leaving the pane. */}
-          <button
-            type="button"
-            onClick={() => {
-              onOpenFriendPicker();
-              onClose();
-            }}
-            className="btn btn-sm ghost"
-            style={{
-              justifyContent: "flex-start",
-              padding: "8px 10px",
-              border: "1px dashed var(--border)",
-              borderRadius: 8,
-              color: "var(--muted)",
-              fontSize: 12,
-            }}
-            title="Open friend picker (F)"
-          >
-            <Ico name="plus" size={12} /> Add a friend
-          </button>
+        </div>
+      </Field>
+
+      {/* Add / manage friends — chip grid moved in from the form body.
+          Selected chips (those in sharedWith) show a check; click to
+          add or remove. When activePicker === "friend", ↑/↓ navigation
+          highlights chips in this section and Enter toggles. */}
+      <Field
+        label={
+          activePicker === "friend"
+            ? `Add friends · ↑/↓ nav · ↵ toggle`
+            : `Add friends · ${allFriends.length} known`
+        }
+      >
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 6,
+            marginTop: 6,
+          }}
+        >
+          {allFriends.map((p, i) => {
+            const on = sharedWith.includes(p.displayName);
+            const isFocused =
+              activePicker === "friend" && i === pickerIndex;
+            return (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => toggleFriend(p.displayName)}
+                onMouseEnter={() => {
+                  if (activePicker === "friend") setPickerIndex(i);
+                }}
+                className="chip"
+                style={{
+                  background: on ? "var(--accent-soft)" : "transparent",
+                  borderColor: on
+                    ? "var(--accent-line)"
+                    : "var(--border)",
+                  color: on ? "var(--accent)" : "var(--fg-2)",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                  // Focus ring matches the prior in-form behavior —
+                  // a 2px accent box-shadow that sits outside the
+                  // border without shifting layout.
+                  boxShadow: isFocused
+                    ? "0 0 0 2px var(--accent)"
+                    : undefined,
+                  outline: "none",
+                  transition:
+                    "box-shadow 140ms var(--ease-out), background 140ms var(--ease-out)",
+                }}
+              >
+                {on && <Ico name="check" size={11} />}
+                {p.displayName}
+              </button>
+            );
+          })}
         </div>
       </Field>
 
