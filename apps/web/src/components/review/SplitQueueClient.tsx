@@ -78,12 +78,12 @@ export function SplitQueueClient({
   const [filter, setLocalFilter] = useState<ReviewListFilter>(initialFilter);
 
   // Toggle: show everything in the slice, including rows already
-  // marked reviewed or already split? Off by default so the queue
-  // surfaces just the open candidates (the "fresh inbox" intent).
-  // Flip on to see all counterparty txns in the slice — useful when
-  // every txn in the active filter is already done and the user
-  // wants to verify or edit existing splits.
-  const [showAll, setShowAll] = useState(false);
+  // marked reviewed or already split? Default ON so a freshly-saved
+  // split stays visible — gives the user immediate confirmation that
+  // their decision landed (the badge updates from "choose split" to
+  // "✓ split N-way with X"). Flip OFF to focus on open candidates
+  // when the queue feels noisy.
+  const [showAll, setShowAll] = useState(true);
 
   // Grouping mode. Mirrors the /review/category "By date / By merchant"
   // toggle but with a third option, "By category", since the split
@@ -830,6 +830,11 @@ function Row({
   onOpen: () => void;
 }) {
   const date = fmtDayMonth(row.txnDate);
+  // "Done" = either explicitly reviewed OR has an active split. Both
+  // are "decisions made". Drives a left-edge stripe + a faint
+  // background tint so the user can scan a section and see at a
+  // glance which rows still need attention.
+  const isDone = row.reviewed || row.shareCount > 1;
   return (
     <button
       type="button"
@@ -841,8 +846,18 @@ function Row({
         gap: 14,
         alignItems: "center",
         padding: "11px 10px",
-        background: "transparent",
+        // Faint credit-tinted background on done rows so scanning a
+        // section visually segregates settled from pending without
+        // requiring the user to read each badge.
+        background: isDone
+          ? "color-mix(in srgb, var(--credit) 3%, transparent)"
+          : "transparent",
         border: "1px solid transparent",
+        // Left stripe on done rows — a 2px credit-colored edge that
+        // makes the "settled" state legible from the row gutter alone.
+        borderLeft: isDone
+          ? "2px solid color-mix(in srgb, var(--credit) 45%, transparent)"
+          : "2px solid transparent",
         borderTop: "1px dashed var(--border-dashed)",
         borderRadius: 8,
         cursor: "pointer",
@@ -897,37 +912,52 @@ function Row({
       </div>
       <div style={{ textAlign: "right", whiteSpace: "nowrap" }}>
         {row.shareCount > 1 ? (
-          // Already-split row — show a calm muted badge stating the
-          // current split. Visually distinct from the accent
-          // "suggested split" pill so the user can tell at a glance
-          // which queue rows are decisions vs done.
+          // Already-split row — credit-tinted "done" pill with a
+          // check icon. Distinct from the accent "suggested split"
+          // pill (which is an *invitation* in accent-orange) so the
+          // user can scan and tell decisions-pending from
+          // decisions-made at a glance.
           <span
             style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
               fontSize: 11.5,
-              color: "var(--muted)",
+              color: "var(--credit)",
               padding: "2px 8px",
-              border: "1px solid var(--border)",
+              border:
+                "1px solid color-mix(in srgb, var(--credit) 35%, transparent)",
               borderRadius: 999,
-              background: "var(--surface-2)",
+              background: "color-mix(in srgb, var(--credit) 10%, transparent)",
             }}
           >
+            <Ico name="check" size={10} />
             split {row.shareCount}-way
             {row.sharedWith.length > 0
               ? ` with ${row.sharedWith.join(", ")}`
               : ""}
           </span>
         ) : row.reviewed ? (
-          // Reviewed-as-personal — also done. Subtle "reviewed" tag.
+          // Reviewed-as-personal — also done, but a quieter treatment
+          // than splits (just-me is the default outcome; splits are
+          // the deliberate decision). Still gets the check so the
+          // user knows it's settled.
           <span
             style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
               fontSize: 11.5,
-              color: "var(--muted-2)",
+              color: "color-mix(in srgb, var(--credit) 65%, var(--muted))",
               padding: "2px 8px",
-              border: "1px dashed var(--border)",
+              border:
+                "1px solid color-mix(in srgb, var(--credit) 22%, var(--border))",
               borderRadius: 999,
-              background: "transparent",
+              background:
+                "color-mix(in srgb, var(--credit) 5%, transparent)",
             }}
           >
+            <Ico name="check" size={10} />
             reviewed · just me
           </span>
         ) : row.suggestedSplitWith ? (
