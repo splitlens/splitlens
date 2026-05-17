@@ -46,6 +46,7 @@ import { Ico } from "@/components/Ico";
 
 import { InboxModal } from "./InboxModal";
 import { useReviewKeyboard } from "./useReviewKeyboard";
+import { updateTransaction } from "@/app/review/actions";
 
 const MONTH_SHORT = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -1774,6 +1775,7 @@ function TxnRow({
   onOpen: () => void;
   onToggleSelect: () => void;
 }) {
+  const router = useRouter();
   const lede = displayCounterparty(row.counterparty, row.narration);
   const def = getCategory(row.category);
   const uncategorized = !row.category;
@@ -1785,6 +1787,49 @@ function TxnRow({
 
   const matchesQ =
     q && lede && lede.toLowerCase().includes(q.toLowerCase());
+
+  // Inline edit state — current cell under edit + an optimistic value the
+  // UI shows immediately while the server save is in flight. The value
+  // persists locally even after the save resolves; the next router.refresh
+  // (or another full page load) is what pulls the canonical row back.
+  const [editing, setEditing] = useState<"counterparty" | null>(null);
+  const [optimisticCounterparty, setOptimisticCounterparty] = useState<
+    string | null
+  >(null);
+  const [saving, setSaving] = useState(false);
+
+  const displayedLede =
+    optimisticCounterparty != null ? optimisticCounterparty : lede;
+
+  const saveCounterparty = useCallback(
+    async (next: string) => {
+      const trimmed = next.trim();
+      // Treat empty as "clear back to narration-derived" — same semantics
+      // as the InboxModal's name-clear flow.
+      const value = trimmed === "" ? null : trimmed;
+      // No-op if the value didn't actually change.
+      if (value === (row.counterparty ?? null)) {
+        setEditing(null);
+        return;
+      }
+      setOptimisticCounterparty(trimmed === "" ? "" : trimmed);
+      setSaving(true);
+      const res = await updateTransaction(row.id, { counterparty: value });
+      setSaving(false);
+      setEditing(null);
+      if (!res.ok) {
+        // Roll back the optimistic value so the canonical row is visible
+        // again. A toast would be nice here later.
+        setOptimisticCounterparty(null);
+      } else {
+        // Re-fetch in the background so the canonical server state lands
+        // (also pulls fresh aggregates so the by-merchant view stays in
+        // sync with the rename).
+        router.refresh();
+      }
+    },
+    [row.id, row.counterparty, router],
+  );
 
   return (
     <div
@@ -1846,18 +1891,43 @@ function TxnRow({
 
       <div className="flex flex-col" style={{ flex: 1, minWidth: 0, gap: 2 }}>
         <div className="flex items-baseline gap-2" style={{ minWidth: 0 }}>
-          <span
-            style={{
-              fontSize: 14,
-              color: lede ? "var(--fg)" : "var(--muted)",
-              fontStyle: lede ? "normal" : "italic",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {lede ?? "—"}
-          </span>
+          {editing === "counterparty" ? (
+            <InlineEditInput
+              initialValue={displayedLede ?? ""}
+              saving={saving}
+              onCommit={saveCounterparty}
+              onCancel={() => setEditing(null)}
+            />
+          ) : (
+            <span
+              className="txn-cell-editable"
+              title="Double-click to rename"
+              onClick={(e) => {
+                // Don't bubble — single-click on the counterparty alone
+                // shouldn't open the modal; the chevron at the row's right
+                // edge is the explicit open affordance. Bubbling would
+                // cause the modal to flash open right before the
+                // double-click edit takes over, which is jarring.
+                e.stopPropagation();
+              }}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                setEditing("counterparty");
+              }}
+              style={{
+                fontSize: 14,
+                color: displayedLede ? "var(--fg)" : "var(--muted)",
+                fontStyle: displayedLede ? "normal" : "italic",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                cursor: "text",
+                opacity: saving ? 0.6 : 1,
+              }}
+            >
+              {displayedLede ?? "—"}
+            </span>
+          )}
           {matchesQ && (
             <span className="chip chip-sm accent" style={{ fontSize: 10 }}>
               matches “{q}”
@@ -1914,6 +1984,78 @@ function TxnRow({
         <Ico name="arrow-right" size={13} />
       </button>
     </div>
+  );
+}
+
+/**
+ * Tiny inline-edit text input used by TxnRow cells. Autofocuses + selects
+ * its content on mount, commits on Enter or blur, cancels on Esc. Width
+ * adapts to a sensible max so the input doesn't disrupt the row layout.
+ *
+ * Click handlers stop propagation so typing in the input doesn't bubble
+ * into the row's open-modal click.
+ */
+function InlineEditInput({
+  initialValue,
+  saving,
+  onCommit,
+  onCancel,
+}: {
+  initialValue: string;
+  saving: boolean;
+  onCommit: (next: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initialValue);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.focus();
+    el.select();
+  }, []);
+
+  return (
+    <input
+      ref={inputRef}
+      type="text"
+      value={value}
+      disabled={saving}
+      onChange={(e) => setValue(e.target.value)}
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        // Capture-stop so the global keyboard nav (↑↓/⏎/J/K) doesn't move
+        // the row pointer while the user is typing.
+        e.stopPropagation();
+        if (e.key === "Enter") {
+          e.preventDefault();
+          onCommit(value);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          onCancel();
+        }
+      }}
+      onBlur={() => {
+        // Save on blur too — Apple-style: the user clicked away, they
+        // meant it. If they wanted to cancel, they'd press Esc first.
+        onCommit(value);
+      }}
+      className="txn-cell-input"
+      style={{
+        fontSize: 14,
+        color: "var(--fg)",
+        background: "var(--surface)",
+        border: "1px solid var(--accent)",
+        borderRadius: 4,
+        padding: "2px 6px",
+        outline: "none",
+        minWidth: 0,
+        flex: "0 1 320px",
+        font: "inherit",
+        fontFamily: "inherit",
+      }}
+    />
   );
 }
 

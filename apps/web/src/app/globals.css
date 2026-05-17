@@ -360,6 +360,25 @@ a {
   transform: scaleY(1.06);
 }
 
+/* Inline-editable cell in the txn list. Subtle hover treatment so the
+   user can see the cell is interactive (and the title attribute tells
+   them double-click renames). Underline style matches Apple's
+   "editable text" affordance in Mail/Reminders. */
+.txn-cell-editable {
+  border-radius: 3px;
+  padding: 1px 3px;
+  margin: -1px -3px;
+  transition: background 140ms var(--ease-out);
+}
+.txn-cell-editable:hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+.txn-cell-input::selection {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
 /* The horizontally-scrolling container for the month tiles. Inherits
    the app-wide hidden-scrollbar default; the scrollbar reveals on
    hover via the universal rule so the surface stays calm at rest. */
