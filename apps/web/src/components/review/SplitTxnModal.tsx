@@ -46,6 +46,8 @@ import {
   applyMerchantRule,
   countOtherUnreviewedForMerchant,
   getTransactionDetailForSplit,
+  getMerchantRecallContext,
+  type MerchantRecallContext,
 } from "@/app/review/actions";
 
 export function SplitTxnModal({
@@ -101,23 +103,30 @@ export function SplitTxnModal({
   // is instant.
   const [detailOpen, setDetailOpen] = useState(false);
   const [detail, setDetail] = useState<ReviewTransactionDetail | null>(null);
+  const [recall, setRecall] = useState<MerchantRecallContext | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   useEffect(() => {
-    // Reset detail cache when the row changes; refetch only if the
-    // pane is currently open.
+    // Reset detail + recall cache when the row changes; refetch only
+    // if the pane is currently open. Detail and recall fire in
+    // parallel — both are cheap indexed reads and they're independent.
     setDetail(null);
+    setRecall(null);
     if (!detailOpen) return;
     let cancelled = false;
     setDetailLoading(true);
-    getTransactionDetailForSplit(row.id).then((d) => {
+    Promise.all([
+      getTransactionDetailForSplit(row.id),
+      getMerchantRecallContext(row.counterparty, row.id, row.amount, 5),
+    ]).then(([d, r]) => {
       if (cancelled) return;
       setDetail(d);
+      setRecall(r);
       setDetailLoading(false);
     });
     return () => {
       cancelled = true;
     };
-  }, [row.id, detailOpen]);
+  }, [row.id, row.counterparty, row.amount, detailOpen]);
 
   // Category-change detection. The queue is sorted by category so
   // arrow-keying walks through same-category rows. When the category
@@ -790,6 +799,7 @@ export function SplitTxnModal({
                     <DetailPane
                       row={row}
                       detail={detail}
+                      recall={recall}
                       loading={detailLoading}
                       onClose={() => setDetailOpen(false)}
                     />
@@ -878,6 +888,31 @@ function periodOfDay(time: string): string {
   return "(late night)";
 }
 
+/**
+ * Map the internal counterparty_kind enum to a human-readable label.
+ * The DB stores parser-derived tags (named / vpa / bill / etc.) that
+ * are meaningful to ingestion code but jargon to a user reading the
+ * detail pane.
+ */
+function humanCounterpartyKind(kind: string | null): string {
+  switch (kind) {
+    case "named":
+      return "Identified business";
+    case "vpa":
+      return "Unknown UPI address";
+    case "person":
+      return "Personal contact";
+    case "bill":
+      return "Bill payment";
+    case "self_transfer":
+      return "Self-transfer";
+    case "unknown":
+      return "Unidentified";
+    default:
+      return kind ?? "Unknown";
+  }
+}
+
 /** Human label for the days-elapsed between txn date and value date. */
 function dayGapLabel(txnDate: string, valueDate: string): string {
   const a = new Date(txnDate + "T00:00:00Z").getTime();
@@ -911,11 +946,13 @@ function dayGapLabel(txnDate: string, valueDate: string): string {
 function DetailPane({
   row,
   detail,
+  recall,
   loading,
   onClose,
 }: {
   row: SplitQueueRow;
   detail: ReviewTransactionDetail | null;
+  recall: MerchantRecallContext | null;
   loading: boolean;
   onClose: () => void;
 }) {
@@ -978,18 +1015,146 @@ function DetailPane({
             )}
           </Field>
 
-          <Field label="Bank narration">
-            <span
-              className="mono"
+          {/* Cadence chip — only when detection produced a result.
+              Helps the user recognize "oh yeah, this is the monthly
+              Apple charge" at a glance, without scanning the recent
+              history below for the pattern manually. */}
+          {recall?.cadence && (
+            <div
               style={{
-                fontSize: 12,
-                color: "var(--fg-2)",
-                wordBreak: "break-word",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "4px 10px",
+                background: "var(--accent-soft)",
+                border: "1px solid var(--accent-line)",
+                borderRadius: 999,
+                fontSize: 11.5,
+                color: "var(--accent)",
+                width: "fit-content",
               }}
             >
-              {detail.narration ?? "—"}
-            </span>
-          </Field>
+              <Ico name="repeat" size={11} />
+              {recall.cadence} subscription detected
+            </div>
+          )}
+
+          {/* Recent history at this merchant — the highest-ROI memory
+              hook in the pane. Shows the last few charges, lifetime
+              total, and typical amount. If the current amount is
+              unusual vs typical, calls it out. */}
+          {recall && recall.lifetimeCount > 0 && (
+            <Field
+              label={`Recent at this merchant · ${recall.lifetimeCount.toLocaleString()} lifetime`}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 4,
+                  marginTop: 2,
+                }}
+              >
+                {recall.recent.map((r) => (
+                  <div
+                    key={r.id}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr auto",
+                      gap: 10,
+                      padding: "3px 0",
+                      fontSize: 12,
+                      borderBottom: "1px dashed var(--border-dashed)",
+                    }}
+                  >
+                    <span
+                      className="mono"
+                      style={{ color: "var(--muted)" }}
+                    >
+                      {fmtDate(r.txnDate)}
+                      {r.txnTime && (
+                        <span
+                          style={{
+                            color: "var(--muted-2)",
+                            marginLeft: 6,
+                          }}
+                        >
+                          {r.txnTime}
+                        </span>
+                      )}
+                    </span>
+                    <span
+                      className="tabular"
+                      style={{
+                        color:
+                          r.direction === "debit"
+                            ? "var(--debit)"
+                            : "var(--credit)",
+                        fontVariantNumeric: "tabular-nums",
+                      }}
+                    >
+                      {r.direction === "debit" ? "−" : "+"}
+                      {fmtInr(r.amount)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              {recall.typicalAmount > 0 && (
+                <div
+                  className="tiny"
+                  style={{
+                    color: "var(--muted-2)",
+                    marginTop: 6,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                >
+                  typical {fmtInr(recall.typicalAmount)} · this charge{" "}
+                  {recall.isUnusualAmount ? (
+                    <span
+                      style={{
+                        color: "var(--warn)",
+                        padding: "1px 6px",
+                        borderRadius: 4,
+                        background:
+                          "color-mix(in srgb, var(--warn) 12%, transparent)",
+                        border:
+                          "1px solid color-mix(in srgb, var(--warn) 30%, transparent)",
+                      }}
+                    >
+                      ⚠ unusual{" "}
+                      {recall.typicalAmount > 0
+                        ? `(${(row.amount / recall.typicalAmount).toFixed(1)}× typical)`
+                        : ""}
+                    </span>
+                  ) : (
+                    <span style={{ color: "var(--credit)" }}>
+                      ✓ typical
+                    </span>
+                  )}
+                </div>
+              )}
+            </Field>
+          )}
+
+          {/* Bank narration: hidden when empty. For PhonePe-only
+              sources we never get a bank narration; showing "—"
+              just adds noise the user has to skip past. */}
+          {detail.narration && detail.narration.trim() !== "" && (
+            <Field label="Bank narration">
+              <span
+                className="mono"
+                style={{
+                  fontSize: 12,
+                  color: "var(--fg-2)",
+                  wordBreak: "break-word",
+                }}
+              >
+                {detail.narration}
+              </span>
+            </Field>
+          )}
 
           <Field label="From account">
             <span style={{ fontSize: 13, color: "var(--fg)" }}>
@@ -1020,7 +1185,7 @@ function DetailPane({
 
           <Field label="Counterparty kind">
             <span style={{ fontSize: 13, color: "var(--fg-2)" }}>
-              {detail.counterpartyKind ?? "unknown"}
+              {humanCounterpartyKind(detail.counterpartyKind)}
               {detail.personId && (
                 <span style={{ color: "var(--muted-2)", marginLeft: 6 }}>
                   · person id <span className="mono">{detail.personId}</span>

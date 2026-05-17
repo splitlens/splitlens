@@ -46,6 +46,128 @@ export async function getTransactionDetailForSplit(
   return getTransactionForReview(txnId);
 }
 
+/**
+ * "How well do I know this merchant?" context for the split modal's
+ * detail pane. Pulls the user's history with this counterparty into
+ * the shape the pane needs to surface recall hooks:
+ *
+ *   - lifetimeCount, lifetimeSum
+ *   - typicalAmount (median across debit rows — robust to outliers)
+ *   - recent[] (latest N txns at this merchant, excluding the
+ *     currently-viewed one)
+ *   - isUnusualAmount (current amount differs from median by > 50%
+ *     in either direction — flag for the UI to call out)
+ *   - cadence (computed via the existing detectMerchantRecurrence;
+ *     null when we can't claim one)
+ */
+export interface MerchantRecallContext {
+  lifetimeCount: number;
+  lifetimeSum: number;
+  typicalAmount: number;
+  recent: Array<{
+    id: number;
+    txnDate: string;
+    txnTime: string | null;
+    amount: number;
+    direction: "debit" | "credit";
+  }>;
+  isUnusualAmount: boolean;
+  cadence: "monthly" | "weekly" | "quarterly" | "yearly" | null;
+}
+
+export async function getMerchantRecallContext(
+  counterparty: string,
+  excludeId: number,
+  currentAmount: number,
+  limit: number = 5,
+): Promise<MerchantRecallContext | null> {
+  const cp = counterparty?.trim();
+  if (!cp) return null;
+
+  const db = openDb();
+  const rows = db.all<{
+    id: number;
+    txn_date: string;
+    txn_time: string | null;
+    withdrawal: number | null;
+    deposit: number | null;
+  }>(sql`
+    SELECT id, txn_date, txn_time, withdrawal, deposit
+    FROM transactions
+    WHERE counterparty = ${cp}
+      AND id != ${excludeId}
+    ORDER BY txn_date DESC, COALESCE(txn_time, '00:00') DESC, id DESC
+  `);
+
+  if (rows.length === 0) {
+    // No history. Detection still runs but will return null.
+    const cadence = await detectMerchantRecurrence(cp);
+    return {
+      lifetimeCount: 0,
+      lifetimeSum: 0,
+      typicalAmount: 0,
+      recent: [],
+      isUnusualAmount: false,
+      cadence:
+        cadence === "monthly" ||
+        cadence === "weekly" ||
+        cadence === "quarterly" ||
+        cadence === "yearly"
+          ? cadence
+          : null,
+    };
+  }
+
+  // Median of debit amounts — robust to one-off refunds / outliers
+  // dragging the mean. Falls back to the mean when no debit rows.
+  const debitAmounts = rows
+    .filter((r) => (r.withdrawal ?? 0) > 0)
+    .map((r) => r.withdrawal!);
+  const sortedAmounts = [...debitAmounts].sort((a, b) => a - b);
+  const typicalAmount =
+    sortedAmounts.length > 0
+      ? sortedAmounts[Math.floor(sortedAmounts.length / 2)]!
+      : 0;
+
+  // Unusual ⇔ current charge is > 50% off from typical AND we have
+  // enough history to be confident (≥ 3 prior charges).
+  const isUnusualAmount =
+    typicalAmount > 0 &&
+    debitAmounts.length >= 3 &&
+    Math.abs(currentAmount - typicalAmount) / typicalAmount > 0.5;
+
+  const lifetimeSum = rows.reduce(
+    (s, r) => s + (r.withdrawal ?? r.deposit ?? 0),
+    0,
+  );
+
+  const recent = rows.slice(0, limit).map((r) => ({
+    id: r.id,
+    txnDate: r.txn_date,
+    txnTime: r.txn_time,
+    amount: r.withdrawal ?? r.deposit ?? 0,
+    direction:
+      r.withdrawal != null ? ("debit" as const) : ("credit" as const),
+  }));
+
+  const cadence = await detectMerchantRecurrence(cp);
+
+  return {
+    lifetimeCount: rows.length,
+    lifetimeSum,
+    typicalAmount,
+    recent,
+    isUnusualAmount,
+    cadence:
+      cadence === "monthly" ||
+      cadence === "weekly" ||
+      cadence === "quarterly" ||
+      cadence === "yearly"
+        ? cadence
+        : null,
+  };
+}
+
 // ============================================================================
 // Field edits — counterparty / category / narration / notes / person
 // ============================================================================
