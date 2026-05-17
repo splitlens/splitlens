@@ -1098,54 +1098,56 @@ function MonthStrip({
             }
           }}
         >
-          {months.map((mo) => {
-            const active =
-              selectedYear === mo.year && selectedMonth === mo.month;
-            return (
-              <button
-                key={`${mo.year}-${mo.month}`}
-                data-month-active={active ? "true" : "false"}
-                type="button"
-                onClick={() => {
-                  const from = `${mo.year}-${String(mo.month).padStart(2, "0")}-01`;
-                  const lastD = new Date(
-                    Date.UTC(mo.year, mo.month, 0),
-                  ).getUTCDate();
-                  const to = `${mo.year}-${String(mo.month).padStart(2, "0")}-${String(lastD).padStart(2, "0")}`;
-                  onPick({ from, to });
-                }}
-                className={`flex flex-col items-center scrubber-month-tile${
-                  active ? " is-active" : ""
-                }`}
-              >
-                <span
-                  className="tag"
-                  style={{
-                    color: active ? "var(--accent)" : "var(--muted)",
-                    fontSize: 10,
+          {(() => {
+            // Bar height is proportional to count vs the loudest month in
+            // the strip. Min-height of 2px keeps quiet months visible at
+            // all. Cap intensity at 1 so an outlier doesn't dwarf the rest.
+            const maxCount = Math.max(1, ...months.map((m) => m.count));
+            return months.map((mo) => {
+              const active =
+                selectedYear === mo.year && selectedMonth === mo.month;
+              const intensity = mo.count / maxCount;
+              return (
+                <button
+                  key={`${mo.year}-${mo.month}`}
+                  data-month-active={active ? "true" : "false"}
+                  type="button"
+                  title={`${MONTH_SHORT[mo.month - 1]} ’${String(mo.year).slice(-2)} · ${mo.count} txn${mo.count === 1 ? "" : "s"}${mo.unreviewed > 0 ? ` · ${mo.unreviewed} unreviewed` : ""}`}
+                  onClick={() => {
+                    const from = `${mo.year}-${String(mo.month).padStart(2, "0")}-01`;
+                    const lastD = new Date(
+                      Date.UTC(mo.year, mo.month, 0),
+                    ).getUTCDate();
+                    const to = `${mo.year}-${String(mo.month).padStart(2, "0")}-${String(lastD).padStart(2, "0")}`;
+                    onPick({ from, to });
                   }}
+                  className={`scrubber-month-bar${active ? " is-active" : ""}`}
+                  aria-pressed={active ? "true" : "false"}
+                  aria-label={`${MONTH_SHORT[mo.month - 1]} ${mo.year}, ${mo.count} transactions`}
                 >
-                  {MONTH_SHORT[mo.month - 1]} &rsquo;{String(mo.year).slice(-2)}
-                </span>
-                <span
-                  className="mono tabular"
-                  style={{
-                    fontSize: 13,
-                    color: active ? "var(--fg)" : "var(--fg-2)",
-                  }}
-                >
-                  {mo.count.toLocaleString()}
-                </span>
-                {mo.unreviewed > 0 && (
+                  <span className="bar-count">
+                    {mo.count.toLocaleString()}
+                  </span>
+                  <span className="bar-area">
+                    <span
+                      className="bar"
+                      style={{
+                        height: `${Math.max(8, intensity * 100)}%`,
+                      }}
+                    />
+                  </span>
+                  <span className="bar-label">
+                    {MONTH_SHORT[mo.month - 1]} ’{String(mo.year).slice(-2)}
+                  </span>
                   <span
-                    className="dot warn"
-                    style={{ width: 5, height: 5 }}
+                    className="bar-dot"
                     aria-hidden
+                    style={{ visibility: mo.unreviewed > 0 ? "visible" : "hidden" }}
                   />
-                )}
-              </button>
-            );
-          })}
+                </button>
+              );
+            });
+          })()}
         </div>
       )}
     </div>
