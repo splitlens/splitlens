@@ -990,33 +990,29 @@ export function Scrubber({
         alignItems: "stretch",
       }}
     >
-      {/* Left column: stacked year strip + month strip. Both share the
-          same `scrubber-month-bar` visual vocabulary (bar height ∝
-          count, count label, period label) so reading them together
-          feels like one zoomed-in view of the same dataset. */}
-      <div
-        className="flex flex-col"
-        style={{ gap: 10, minWidth: 0, maxWidth: 520 }}
-      >
-        <YearStrip
-          years={buckets.years}
-          selectedYear={selectedYear}
-          isWholeYearSelected={isWholeYearSelected}
-          onPick={onPick}
-        />
-        {/* Month strip — horizontally scrollable through ALL months,
-            even after a year is picked, so the user can still
-            cross-jump years from this strip. The active month
-            auto-scrolls into view; the latest month sits on the right
-            edge by default so the most-relevant data is one glance
-            away. */}
-        <MonthStrip
-          months={monthsStrip}
-          selectedYear={selectedYear}
-          selectedMonth={selectedMonth}
-          onPick={onPick}
-        />
-      </div>
+      {/* Three tiers stacked horizontally: year → month → day. All
+          three share the `.scrubber-month-bar` / `.scrubber-day-bar`
+          vocabulary (bar height ∝ count) so the row reads as one
+          zoomed-out → zoomed-in continuum. Vertical dividers separate
+          tiers so each has its own visual breathing room. */}
+      <YearStrip
+        years={buckets.years}
+        selectedYear={selectedYear}
+        isWholeYearSelected={isWholeYearSelected}
+        onPick={onPick}
+      />
+
+      <span style={{ width: 1, background: "var(--border)" }} />
+
+      {/* Month strip — horizontally scrollable through ALL months,
+          even after a year is picked, so the user can still cross-jump
+          years from this strip. */}
+      <MonthStrip
+        months={monthsStrip}
+        selectedYear={selectedYear}
+        selectedMonth={selectedMonth}
+        onPick={onPick}
+      />
 
       <span style={{ width: 1, background: "var(--border)" }} />
 
@@ -1319,7 +1315,10 @@ function YearStrip({
   }, []);
 
   return (
-    <div className="flex flex-col" style={{ gap: 6, minWidth: 0 }}>
+    <div
+      className="flex flex-col"
+      style={{ gap: 6, minWidth: 0, maxWidth: 400, flexShrink: 0 }}
+    >
       <span className="eyebrow">Year</span>
       {years.length === 0 ? (
         <span className="small muted">no year data</span>
@@ -1356,11 +1355,12 @@ function YearStrip({
                   aria-pressed={isActive ? "true" : "false"}
                   aria-label={`${y.year}, ${y.count} transactions`}
                   style={{
-                    // Wider bars than the month strip since there are
-                    // fewer entries and we want them to feel weightier
-                    // — this is the highest-level summary in the
-                    // three-tier nav.
-                    width: 64,
+                    // Same width as the month bars — the three tiers
+                    // sit side-by-side now and share a visual rhythm,
+                    // so bar size shouldn't vary between them. (The
+                    // year strip used to be wider when it was stacked
+                    // above the month strip; that's not the case any
+                    // more.)
                     // Softer outline when the year contains the active
                     // filter but isn't itself the filter (e.g. user is
                     // looking at May 2025 — the 2025 bar gets a hint
