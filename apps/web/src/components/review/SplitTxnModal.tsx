@@ -740,6 +740,15 @@ export function SplitTxnModal({
             display: "flex",
             flexDirection: "column",
             boxShadow: "0 24px 80px rgba(0,0,0,0.55)",
+            // Credit-tinted top edge on settled txns (reviewed OR
+            // already split) — gives the user immediate at-a-glance
+            // signal of state when the modal opens. Mirrors the
+            // left-stripe treatment on queue rows so settled context
+            // reads consistently across surfaces.
+            borderTop:
+              row.reviewed || row.shareCount > 1
+                ? "2px solid color-mix(in srgb, var(--credit) 55%, transparent)"
+                : undefined,
             transition: "max-width 320ms cubic-bezier(0.16, 1, 0.3, 1)",
           }}
         >
@@ -765,6 +774,36 @@ export function SplitTxnModal({
               {" · "}
               {row.counterpartyKind ?? "txn"}
             </span>
+            {/* Saved-state badge — credit-tinted pill with a check.
+                Distinguishes already-settled txns from fresh
+                candidates the moment the modal opens. Two variants:
+                  - split: "✓ Split N-way" (the deliberate decision)
+                  - reviewed-only: "✓ Reviewed · just me" (defaulted
+                    to personal). Both signal "no action required". */}
+            {(row.shareCount > 1 || row.reviewed) && (
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  padding: "2px 8px",
+                  borderRadius: 999,
+                  fontSize: 11,
+                  background:
+                    "color-mix(in srgb, var(--credit) 10%, transparent)",
+                  border:
+                    "1px solid color-mix(in srgb, var(--credit) 35%, transparent)",
+                  color: "var(--credit)",
+                  fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                  letterSpacing: "0.01em",
+                }}
+              >
+                <Ico name="check" size={10} />
+                {row.shareCount > 1
+                  ? `Split ${row.shareCount}-way`
+                  : "Reviewed · just me"}
+              </span>
+            )}
             <span style={{ flex: 1 }} />
             <button type="button" className="btn btn-sm ghost" onClick={onPrev}>
               <Ico name="arrow-left" size={13} />
@@ -1094,6 +1133,69 @@ export function SplitTxnModal({
                   drawer to the right). The "Split with friends" toggle
                   above + the X-way badge open that pane; the F shortcut
                   jumps straight into friend-pick mode within it. */}
+              {/* Participant strip — read-only display of who this
+                  txn is split with, visible whenever the user named
+                  at least one friend. Lets the user see participants
+                  at-a-glance without opening the SplitPane. Pill is
+                  styled to match the credit/done tone when the txn
+                  is already settled, neutral otherwise. Click any
+                  pill to open the SplitPane and edit. */}
+              {split && sharedWith.length > 0 && (
+                <div
+                  style={{
+                    marginTop: 10,
+                    display: "flex",
+                    flexWrap: "wrap",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                >
+                  <span
+                    className="tiny"
+                    style={{
+                      color: "var(--muted-2)",
+                      marginRight: 2,
+                    }}
+                  >
+                    With:
+                  </span>
+                  {sharedWith.map((name) => {
+                    const settled = row.reviewed || row.shareCount > 1;
+                    return (
+                      <button
+                        key={name}
+                        type="button"
+                        onClick={() =>
+                          setRightPane((cur) =>
+                            cur === "split" ? null : "split",
+                          )
+                        }
+                        title="Edit split"
+                        className="chip"
+                        style={{
+                          padding: "2px 8px",
+                          fontSize: 11.5,
+                          background: settled
+                            ? "color-mix(in srgb, var(--credit) 10%, transparent)"
+                            : "var(--accent-soft)",
+                          borderColor: settled
+                            ? "color-mix(in srgb, var(--credit) 35%, transparent)"
+                            : "var(--accent-line)",
+                          color: settled
+                            ? "var(--credit)"
+                            : "var(--accent)",
+                          cursor: "pointer",
+                          fontFamily: "inherit",
+                        }}
+                      >
+                        {settled && <Ico name="check" size={10} />}
+                        {name}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
               {split && row.direction === "debit" && (
                 <div
                   className="small"
