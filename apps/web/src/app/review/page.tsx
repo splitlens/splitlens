@@ -23,6 +23,7 @@ import {
   listCustomCategories,
   getAllClientReviewRows,
   getAllMerchantContexts,
+  sweepPendingMerchantRules,
   type ReviewListFilter,
 } from "@/lib/review-repo";
 import { listKnownPeople } from "../friends/actions";
@@ -77,6 +78,12 @@ export default async function ReviewPage({ searchParams }: PageProps) {
     recurrenceClass:
       recParam === "one_time" || recParam === "recurring" ? recParam : null,
   };
+
+  // Apply any saved per-merchant rules to un-reviewed txns that landed
+  // since the last visit. Cheap idempotent UPDATE — no-op when no rules
+  // exist. Runs before the bulk row load so the response carries
+  // already-categorized rows.
+  await sweepPendingMerchantRules();
 
   // /review now runs the filter pipeline on the client. The server's job
   // is to ship the whole txn ledger + the static dropdown/lookup data

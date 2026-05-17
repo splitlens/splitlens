@@ -207,6 +207,24 @@ export const people = sqliteTable("people", {
  * SmartSuggest pipeline merges these in at read-time; nothing in the
  * ingestion pipeline writes here.
  */
+/**
+ * Per-merchant "always categorize as X" rules. When the user accepts a
+ * category in the review inbox and ticks "Apply to all N other X txns",
+ * we both bulk-update the existing un-reviewed rows AND insert/upsert
+ * a rule here. Future ingestion consults this table — recurring
+ * merchants are categorized lifetime-once. Counterparty is the PK so a
+ * given merchant has exactly one rule (the most recently saved).
+ */
+export const merchantCategoryRules = sqliteTable(
+  "merchant_category_rules",
+  {
+    counterparty: text("counterparty").primaryKey(),
+    category: text("category").notNull(),
+    createdAt: isoTimestamp("created_at"),
+    updatedAt: isoTimestamp("updated_at"),
+  },
+);
+
 export const merchantLabels = sqliteTable(
   "merchant_labels",
   {

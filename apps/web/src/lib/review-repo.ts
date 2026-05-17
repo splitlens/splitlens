@@ -1735,6 +1735,50 @@ export async function getMerchantListAggregates(
   return out;
 }
 
+/**
+ * Apply every saved merchant_category_rules row to any newly-arrived
+ * un-reviewed transactions whose counterparty matches. Called from the
+ * /review page loader so the user's previously-set rules keep working
+ * across statement ingestions — they don't have to re-toggle the bulk
+ * apply each month for the same recurring merchant.
+ *
+ * Idempotent: only updates rows that don't already have the rule's
+ * category applied. Reviewed=1 rows are left alone — those are user-
+ * confirmed and trump any rule.
+ *
+ * Cheap: one indexed UPDATE per call. Skips entirely when no rules
+ * exist (zero-row JOIN, ~microseconds).
+ */
+export async function sweepPendingMerchantRules(): Promise<{
+  swept: number;
+}> {
+  const result = db().run(sql`
+    UPDATE transactions
+    SET category = (
+          SELECT category FROM merchant_category_rules r
+          WHERE r.counterparty = transactions.counterparty
+        ),
+        category_rule = 'merchant',
+        updated_at = CURRENT_TIMESTAMP
+    WHERE transactions.counterparty IN (
+            SELECT counterparty FROM merchant_category_rules
+          )
+      AND transactions.reviewed = 0
+      AND (
+        transactions.category IS NULL
+        OR transactions.category != (
+          SELECT category FROM merchant_category_rules r
+          WHERE r.counterparty = transactions.counterparty
+        )
+      )
+  `);
+  const changes =
+    typeof (result as { changes?: number }).changes === "number"
+      ? (result as { changes: number }).changes
+      : 0;
+  return { swept: changes };
+}
+
 /** 1–2 char avatar text. Persons use first letters of words; businesses use the leading char. */
 function initialsFor(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);

@@ -1043,3 +1043,101 @@ function monthRange(startYm: string, endYm: string): string[] {
   }
   return out;
 }
+
+// ============================================================================
+// Per-merchant category rules — "always categorize Shilpa V as X"
+// ============================================================================
+
+/**
+ * Persist a "this counterparty is always category X" rule AND bulk-apply
+ * it to every existing un-reviewed transaction with the same counterparty.
+ *
+ *   1. UPSERT into merchant_category_rules (counterparty is the PK; later
+ *      saves replace earlier ones so the user can change their mind).
+ *   2. UPDATE transactions SET category = $cat, category_rule = 'merchant'
+ *      WHERE counterparty = $cp AND reviewed = 0 — reviewed=1 rows are
+ *      left alone (those are user-confirmed and trump any rule).
+ *
+ * Future ingestion consults merchant_category_rules and applies the
+ * stored category to any newly-arriving row whose counterparty matches;
+ * see packages/ingest/src/index.ts for the application point.
+ *
+ * Idempotent — calling with the same args twice is a no-op past the
+ * first call's UPDATE.
+ */
+export async function applyMerchantCategoryRule(
+  counterparty: string,
+  category: string | null,
+): Promise<{ ok: true; bulkUpdated: number } | { ok: false; error: string }> {
+  const cp = counterparty.trim();
+  if (!cp) return { ok: false, error: "counterparty required" };
+  const cat = category == null ? null : category.trim();
+  if (cat == null || cat === "") {
+    // Treat clear-category as "remove the rule" — keeps the UI's
+    // toggle-on-uncategorize affordance honest.
+    openDb().run(
+      sql`DELETE FROM merchant_category_rules WHERE counterparty = ${cp}`,
+    );
+    revalidatePath("/review");
+    revalidatePath("/dashboard");
+    return { ok: true, bulkUpdated: 0 };
+  }
+
+  const db = openDb();
+
+  // 1. Persist the rule (UPSERT by counterparty PK).
+  db.run(sql`
+    INSERT INTO merchant_category_rules (counterparty, category, created_at, updated_at)
+    VALUES (${cp}, ${cat}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ON CONFLICT(counterparty) DO UPDATE SET
+      category = excluded.category,
+      updated_at = CURRENT_TIMESTAMP
+  `);
+
+  // 2. Bulk-apply to all existing un-reviewed txns for this counterparty.
+  // Skip already-correct rows so the affected-rows count is honest.
+  // category_rule = 'merchant' records WHY this row has its category, so
+  // the ingestion-time merger knows it came from the rule (not a SmartSuggest
+  // accept) and can re-apply if the rule changes later.
+  const result = db.run(sql`
+    UPDATE transactions
+    SET category = ${cat},
+        category_rule = 'merchant',
+        updated_at = CURRENT_TIMESTAMP
+    WHERE counterparty = ${cp}
+      AND reviewed = 0
+      AND (category IS NULL OR category != ${cat})
+  `);
+  // better-sqlite3's Statement.run() returns { changes, lastInsertRowid }.
+  // Drizzle's typing surfaces this as `unknown`, so we narrow at the boundary.
+  const bulkUpdated =
+    typeof (result as { changes?: number }).changes === "number"
+      ? (result as { changes: number }).changes
+      : 0;
+
+  revalidatePath("/review");
+  revalidatePath("/dashboard");
+  return { ok: true, bulkUpdated };
+}
+
+/**
+ * How many other un-reviewed txns would be affected by setting a rule
+ * for this counterparty? Drives the "Apply to N other X txns" copy in
+ * the InboxModal. Excludes the current row (passed in as `excludeId`)
+ * since we always update it explicitly via the normal save path.
+ */
+export async function countOtherUnreviewedForMerchant(
+  counterparty: string,
+  excludeId: number,
+): Promise<number> {
+  const cp = counterparty.trim();
+  if (!cp) return 0;
+  const row = openDb().get<{ n: number }>(sql`
+    SELECT count(*) AS n
+    FROM transactions
+    WHERE counterparty = ${cp}
+      AND reviewed = 0
+      AND id != ${excludeId}
+  `);
+  return row?.n ?? 0;
+}

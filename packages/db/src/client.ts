@@ -229,6 +229,17 @@ CREATE TABLE IF NOT EXISTS merchant_labels (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_merchant_label_key
   ON merchant_labels(counterparty, amount_inr);
 
+-- Per-merchant "always categorize as X" rules. Set when the user
+-- accepts the bulk-apply offer in the review inbox; consulted on
+-- future ingestion so a recurring merchant never has to be
+-- categorized twice. One row per counterparty.
+CREATE TABLE IF NOT EXISTS merchant_category_rules (
+  counterparty  TEXT PRIMARY KEY,
+  category      TEXT NOT NULL,
+  created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Google Maps Timeline ingestion. One row per Takeout import. SHA-256 of
 -- the source bytes is the idempotency key; re-uploading the same export
 -- returns the existing row without writing anything new.

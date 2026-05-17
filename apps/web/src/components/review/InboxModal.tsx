@@ -45,6 +45,8 @@ import {
   markReviewed,
   unmarkReviewed,
   saveMerchantLabel,
+  applyMerchantCategoryRule,
+  countOtherUnreviewedForMerchant,
   type TransactionEdits,
 } from "@/app/review/actions";
 import {
@@ -324,6 +326,34 @@ function InboxBody({
   const [attachOpen, setAttachOpen] = useState(false);
   const [addingCategory, setAddingCategory] = useState(false);
 
+  // Bulk-apply state. When the user picks a category for a txn whose
+  // counterparty has other un-reviewed siblings, we surface an "apply to
+  // all N other Shilpa V txns" toggle. Default ON — categorizing a
+  // recurring merchant once should lifetime-categorize it.
+  const [otherUnreviewedCount, setOtherUnreviewedCount] = useState<number>(0);
+  const [applyToAll, setApplyToAll] = useState<boolean>(true);
+
+  // Fetch the count of other un-reviewed txns for this merchant on mount
+  // / when the txn changes. Cheap query (counterparty index hits), runs
+  // in the background. We don't gate the UI on it — if it hasn't landed
+  // by the time the user saves, applyMerchantCategoryRule still works,
+  // just without the count in the label.
+  useEffect(() => {
+    if (!form.counterparty || form.counterparty.trim() === "") {
+      setOtherUnreviewedCount(0);
+      return;
+    }
+    let cancelled = false;
+    countOtherUnreviewedForMerchant(form.counterparty.trim(), txn.id).then(
+      (n) => {
+        if (!cancelled) setOtherUnreviewedCount(n);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [form.counterparty, txn.id]);
+
   // Suggested counterparty from narration when the field is empty.
   const suggestedCounterparty = useMemo(
     () =>
@@ -368,16 +398,52 @@ function InboxBody({
       setSaving(true);
       setErrMsg(null);
       const r = await updateTransaction(txn.id, buildEdits(alsoReviewed));
-      setSaving(false);
       if (!r.ok) {
+        setSaving(false);
         setErrMsg(r.error);
         return;
       }
+
+      // If the user changed the category AND opted to apply it to all
+      // other un-reviewed siblings for this merchant, run the bulk-apply
+      // + persist the rule. The single-txn save above already wrote this
+      // row's category; this call handles the rest of the cohort and
+      // adds the rule for future ingestion. We fire-and-await so any
+      // bulk-update errors surface alongside the regular save errors.
+      const categoryChanged = form.category !== original.category;
+      const counterparty = form.counterparty.trim();
+      if (
+        applyToAll &&
+        categoryChanged &&
+        counterparty &&
+        otherUnreviewedCount > 0
+      ) {
+        const bulk = await applyMerchantCategoryRule(
+          counterparty,
+          form.category.trim() || null,
+        );
+        if (!bulk.ok) {
+          setSaving(false);
+          setErrMsg(`Saved this txn, but rule failed: ${bulk.error}`);
+          return;
+        }
+      }
+
+      setSaving(false);
       setSavedMsg(alsoReviewed ? "Saved + marked reviewed" : "Saved");
       window.setTimeout(() => setSavedMsg(null), 1800);
       onAfterSave();
     },
-    [buildEdits, onAfterSave, txn.id],
+    [
+      buildEdits,
+      onAfterSave,
+      txn.id,
+      form.category,
+      form.counterparty,
+      original.category,
+      applyToAll,
+      otherUnreviewedCount,
+    ],
   );
 
   const acceptSuggestion = useCallback(() => {
@@ -792,6 +858,107 @@ function InboxBody({
                 />
               </motion.div>
             )}
+          </AnimatePresence>
+
+          {/* Bulk-apply offer — appears once the user has picked a
+              category that differs from the original AND there are
+              other un-reviewed txns for the same merchant to bulk-
+              update. Default ON because categorizing a recurring
+              merchant should be a lifetime decision, not a per-txn
+              one. The toggle persists the category as a rule for
+              future ingestion too. */}
+          <AnimatePresence initial={false}>
+            {form.counterparty.trim().length > 0 &&
+              form.category.trim().length > 0 &&
+              form.category !== original.category &&
+              otherUnreviewedCount > 0 && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{
+                    duration: 0.22,
+                    ease: [0.22, 1, 0.36, 1],
+                  }}
+                  style={{ overflow: "hidden" }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setApplyToAll((v) => !v)}
+                    aria-pressed={applyToAll}
+                    style={{
+                      marginTop: 12,
+                      width: "100%",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      padding: "10px 12px",
+                      background: applyToAll
+                        ? "var(--accent-soft)"
+                        : "var(--surface-2)",
+                      border: `1px solid ${
+                        applyToAll
+                          ? "var(--accent-line)"
+                          : "var(--border)"
+                      }`,
+                      borderRadius: 8,
+                      color: "var(--fg)",
+                      fontFamily: "inherit",
+                      fontSize: 13,
+                      cursor: "pointer",
+                      textAlign: "left",
+                      transition:
+                        "background 180ms ease, border-color 180ms ease",
+                    }}
+                  >
+                    <span
+                      aria-hidden
+                      style={{
+                        width: 16,
+                        height: 16,
+                        borderRadius: 4,
+                        border: `1.5px solid ${
+                          applyToAll
+                            ? "var(--accent)"
+                            : "var(--border-strong)"
+                        }`,
+                        background: applyToAll
+                          ? "var(--accent)"
+                          : "transparent",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                        color: "var(--accent-ink)",
+                      }}
+                    >
+                      {applyToAll && <Ico name="check" size={11} />}
+                    </span>
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      Always categorize{" "}
+                      <b style={{ fontWeight: 500 }}>
+                        “{form.counterparty.trim()}”
+                      </b>{" "}
+                      as{" "}
+                      <b style={{ fontWeight: 500 }}>
+                        {activeCatDef.label}
+                      </b>{" "}
+                      — applies to{" "}
+                      <b style={{ fontWeight: 500 }}>
+                        {otherUnreviewedCount.toLocaleString()} other
+                        un-reviewed
+                      </b>{" "}
+                      txn{otherUnreviewedCount === 1 ? "" : "s"} and
+                      every future one
+                    </span>
+                    <Ico
+                      name="sparkles"
+                      size={13}
+                      className="accent"
+                    />
+                  </button>
+                </motion.div>
+              )}
           </AnimatePresence>
         </div>
 
