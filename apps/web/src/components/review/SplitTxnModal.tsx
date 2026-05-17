@@ -295,14 +295,16 @@ export function SplitTxnModal({
             width: "100%",
             // Modal grows when the detail pane is open so the form
             // doesn't shrink. 640 stays the form's width — the extra
-            // ~420px houses the detail pane.
+            // 420 houses the detail pane drawer. Timing matches the
+            // inner aside's width animation (320ms easeOutExpo) so
+            // the shell and the drawer expand in lockstep.
             maxWidth: detailOpen ? 1060 : 640,
             maxHeight: "90vh",
             overflow: "hidden",
             display: "flex",
             flexDirection: "column",
             boxShadow: "0 24px 80px rgba(0,0,0,0.55)",
-            transition: "max-width 240ms cubic-bezier(0.16, 1, 0.3, 1)",
+            transition: "max-width 320ms cubic-bezier(0.16, 1, 0.3, 1)",
           }}
         >
           {/* Header */}
@@ -734,30 +736,59 @@ export function SplitTxnModal({
             )}
             </div>
 
-            {/* Right pane — detail */}
-            {detailOpen && (
-              <motion.aside
-                initial={{ opacity: 0, x: 12 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 12 }}
-                transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
-                style={{
-                  flex: "1 1 auto",
-                  minWidth: 0,
-                  borderLeft: "1px solid var(--border)",
-                  background: "var(--surface-2)",
-                  overflowY: "auto",
-                  padding: "18px 22px",
-                }}
-              >
-                <DetailPane
-                  row={row}
-                  detail={detail}
-                  loading={detailLoading}
-                  onClose={() => setDetailOpen(false)}
-                />
-              </motion.aside>
-            )}
+            {/* Right pane — detail. Animates its own width on
+                enter/exit so the reveal feels like a drawer sliding
+                out from the modal's right edge, not a fade.
+                AnimatePresence is what allows the exit animation to
+                fire when detailOpen flips back to false. */}
+            <AnimatePresence initial={false}>
+              {detailOpen && (
+                <motion.aside
+                  key="detail-pane"
+                  initial={{ width: 0, opacity: 0 }}
+                  animate={{ width: 420, opacity: 1 }}
+                  exit={{ width: 0, opacity: 0 }}
+                  transition={{
+                    width: { duration: 0.32, ease: [0.16, 1, 0.3, 1] },
+                    opacity: {
+                      duration: 0.2,
+                      ease: [0.16, 1, 0.3, 1],
+                      delay: 0.04,
+                    },
+                  }}
+                  style={{
+                    flex: "0 0 auto",
+                    overflow: "hidden",
+                    borderLeft: "1px solid var(--border)",
+                    background: "var(--surface-2)",
+                  }}
+                >
+                  <motion.div
+                    initial={{ x: 24, opacity: 0 }}
+                    animate={{ x: 0, opacity: 1 }}
+                    exit={{ x: 24, opacity: 0 }}
+                    transition={{
+                      duration: 0.26,
+                      ease: [0.16, 1, 0.3, 1],
+                      delay: 0.06,
+                    }}
+                    style={{
+                      width: 420,
+                      height: "100%",
+                      overflowY: "auto",
+                      padding: "18px 22px",
+                    }}
+                  >
+                    <DetailPane
+                      row={row}
+                      detail={detail}
+                      loading={detailLoading}
+                      onClose={() => setDetailOpen(false)}
+                    />
+                  </motion.div>
+                </motion.aside>
+              )}
+            </AnimatePresence>
           </div>
 
           {/* Footer */}
