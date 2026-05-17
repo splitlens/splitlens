@@ -282,24 +282,25 @@ a {
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  padding: 0 6px;
+  /* Larger horizontal padding so the bar inside is slimmer — reads as
+     a mound like the day bars rather than a chunky block. */
+  padding: 0 14px;
 }
 .scrubber-month-bar > .bar-area > .bar {
   width: 100%;
-  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  /* Background is set inline per-cell with intensity-based opacity so
+     the visual saturation curve matches the day-by-day chart's bars. */
   border-radius: 2px;
   min-height: 3px;
   /* Bars settle into new heights when the strip data changes (e.g.
      when the user picks a different filter and the counts shift). */
   transition:
     height 320ms var(--ease-out-expo),
-    background 220ms var(--ease-out);
-}
-.scrubber-month-bar.is-active > .bar-area > .bar {
-  background: var(--accent);
+    background 220ms var(--ease-out),
+    filter 180ms var(--ease-out);
 }
 .scrubber-month-bar:hover:not(.is-active) > .bar-area > .bar {
-  background: color-mix(in srgb, var(--accent) 55%, transparent);
+  filter: brightness(1.25);
 }
 
 .scrubber-month-bar > .bar-label {
@@ -343,10 +344,14 @@ a {
 .scrubber-day-bars > .scrubber-day-bar > span {
   width: 100%;
   display: block;
-  border-radius: 1px;
+  /* 2px matches the month bars in the range strip — both rows of bars
+     share one visual vocabulary. */
+  border-radius: 2px;
+  min-height: 3px;
   transition:
     height 320ms var(--ease-out-expo),
-    background 220ms var(--ease-out);
+    background 220ms var(--ease-out),
+    filter 180ms var(--ease-out);
 }
 .scrubber-day-bars > .scrubber-day-bar:not(:disabled):hover > span {
   filter: brightness(1.25);

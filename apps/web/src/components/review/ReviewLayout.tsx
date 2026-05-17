@@ -1136,13 +1136,20 @@ function MonthStrip({
                   aria-label={`${MONTH_SHORT[mo.month - 1]} ${mo.year}, ${mo.count} transactions`}
                 >
                   {/* Bar sits at the top of the cell so its bottom edge
-                       aligns with the day-by-day chart's bar bottoms. The
-                       count, label, and unreviewed dot then stack below. */}
+                       aligns with the day-by-day chart's bar bottoms.
+                       Opacity is intensity-based (0-80% accent) so the
+                       saturation across the strip tells the same story as
+                       the day-by-day chart — quiet months look ghostly,
+                       busy ones look saturated, the active month is full
+                       accent. Count, label, and unreviewed dot stack below. */}
                   <span className="bar-area">
                     <span
                       className="bar"
                       style={{
                         height: `${Math.max(8, intensity * 100)}%`,
+                        background: active
+                          ? "var(--accent)"
+                          : `color-mix(in srgb, var(--accent) ${Math.round(18 + intensity * 62)}%, transparent)`,
                       }}
                     />
                   </span>
