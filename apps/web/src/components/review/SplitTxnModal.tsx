@@ -535,8 +535,16 @@ export function SplitTxnModal({
           alignItems: "center",
           justifyContent: "center",
           padding: 24,
-          background: "color-mix(in srgb, var(--bg) 78%, transparent)",
-          backdropFilter: "blur(5px)",
+          // Lighter overlay + stronger blur so the page behind the
+          // modal stays visible as a frosted-glass texture, not a near-
+          // black void. The queue rows behind read as silhouettes —
+          // enough to remind the user where they are without competing
+          // with the modal content. WebkitBackdropFilter mirrors
+          // backdropFilter for Safari (which still gates the unprefixed
+          // form behind a flag in some versions).
+          background: "color-mix(in srgb, var(--bg) 38%, transparent)",
+          backdropFilter: "blur(14px) saturate(120%)",
+          WebkitBackdropFilter: "blur(14px) saturate(120%)",
         }}
       >
         <motion.div
