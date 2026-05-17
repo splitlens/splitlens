@@ -90,6 +90,16 @@ export interface InboxModalProps {
   onAfterSave: () => void;
   onAfterAttach: () => void;
   onSkipToNext: () => void;
+  /**
+   * When set, the modal opens (or re-renders) in this view instead of the
+   * default "txn" view. Used by the /review merchant leaderboard to open
+   * straight into MerchantDetailView for the clicked counterparty.
+   *
+   * The parent is responsible for clearing this back to null when the user
+   * navigates (arrow keys, picks a different txn from the date list, etc.)
+   * — otherwise the merchant view would stick across unrelated navigation.
+   */
+  initialView?: InboxView | null;
 }
 
 /**
@@ -110,21 +120,28 @@ const CATEGORY_KEYS = [
  *   - "merchant" takeover via MerchantDetailView (clicked into from the
  *                merchant history card; back arrow / Esc returns to txn)
  */
-type InboxView =
+export type InboxView =
   | { kind: "txn" }
   | { kind: "merchant"; counterparty: string; focusTxnId: number };
 
 export function InboxModal(props: InboxModalProps) {
-  const { open, onClose, txn, onSelectId } = props;
+  const { open, onClose, txn, onSelectId, initialView } = props;
   const panelRef = useRef<HTMLDivElement>(null);
-  const [view, setView] = useState<InboxView>({ kind: "txn" });
+  const [view, setView] = useState<InboxView>(
+    () => initialView ?? { kind: "txn" },
+  );
 
-  // Reset the view to the txn form whenever the modal closes or the active
-  // txn changes. Without this we'd carry a stale "merchant" mode across
-  // navigation events that should drop us back at a fresh form.
+  // Reset the view whenever modal-open / active-txn / initialView changes:
+  //   - On open: honor `initialView` (parent's intent — "open in merchant
+  //     view" or default to txn).
+  //   - On txn navigation while open: parent is responsible for clearing
+  //     `initialView` if the navigation should drop back to txn mode (it
+  //     does, in ReviewLayout); we just mirror whatever it provides.
+  //   - On close: also resets, so the next open starts clean unless parent
+  //     explicitly sets a fresh intent.
   useEffect(() => {
-    setView({ kind: "txn" });
-  }, [open, txn?.id]);
+    setView(initialView ?? { kind: "txn" });
+  }, [open, txn?.id, initialView]);
 
   useEffect(() => {
     if (!open) return;

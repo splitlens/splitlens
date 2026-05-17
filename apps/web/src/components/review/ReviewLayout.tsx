@@ -129,8 +129,36 @@ export function ReviewLayout(props: ReviewLayoutProps) {
     [params, router, startTransition],
   );
 
-  const goToId = useCallback((id: number) => setParam("id", String(id)), [setParam]);
-  const closeDrawer = useCallback(() => setParam("id", null), [setParam]);
+  // When the user clicks a merchant in the leaderboard, we want the modal
+  // to open straight into MerchantDetailView for that counterparty instead
+  // of the default txn-edit form. Stored on the parent so it can be
+  // cleared on any unrelated navigation (arrow keys, picking a different
+  // txn from the date list) — otherwise the merchant view would stick.
+  const [merchantViewIntent, setMerchantViewIntent] = useState<{
+    counterparty: string;
+    focusTxnId: number;
+  } | null>(null);
+
+  const goToId = useCallback(
+    (id: number) => {
+      setMerchantViewIntent(null);
+      setParam("id", String(id));
+    },
+    [setParam],
+  );
+  const closeDrawer = useCallback(() => {
+    setMerchantViewIntent(null);
+    setParam("id", null);
+  }, [setParam]);
+  const openMerchantInModal = useCallback(
+    (counterparty: string, focusTxnId: number) => {
+      // Order matters: set the intent BEFORE we trigger the URL change so
+      // the modal renders with the intent on its first frame of being open.
+      setMerchantViewIntent({ counterparty, focusTxnId });
+      setParam("id", String(focusTxnId));
+    },
+    [setParam],
+  );
 
   // Keyboard nav
   const activeIdx = useMemo(() => {
@@ -349,6 +377,7 @@ export function ReviewLayout(props: ReviewLayoutProps) {
             q={filter.q ?? ""}
             groupMode={listGroupMode}
             onSelectId={goToId}
+            onSelectMerchant={openMerchantInModal}
             onToggleSelected={toggleSelected}
           />
         </div>
@@ -386,6 +415,15 @@ export function ReviewLayout(props: ReviewLayoutProps) {
         }}
         onAfterAttach={refresh}
         onSkipToNext={goNextUnreviewed}
+        initialView={
+          merchantViewIntent
+            ? {
+                kind: "merchant",
+                counterparty: merchantViewIntent.counterparty,
+                focusTxnId: merchantViewIntent.focusTxnId,
+              }
+            : null
+        }
       />
     </main>
   );
@@ -1054,14 +1092,13 @@ function groupByMerchant(rows: ReviewListRow[]): MerchantGroup[] {
     g.rows.push(r);
     if (r.direction === "debit") g.debitTotal += r.amount;
   }
-  // Most-active merchants first within the filtered window. Tie-break by
-  // debit total so two merchants with the same count surface the bigger
-  // spender first. "—" (unknown) sinks last regardless.
+  // Highest-spend merchants first within the filtered window. Tie-break
+  // by transaction count. "—" (unknown) sinks last regardless.
   return [...map.values()].sort((a, b) => {
     if (a.merchant === UNKNOWN_MERCHANT_KEY) return 1;
     if (b.merchant === UNKNOWN_MERCHANT_KEY) return -1;
-    if (b.rows.length !== a.rows.length) return b.rows.length - a.rows.length;
-    return b.debitTotal - a.debitTotal;
+    if (b.debitTotal !== a.debitTotal) return b.debitTotal - a.debitTotal;
+    return b.rows.length - a.rows.length;
   });
 }
 
@@ -1086,6 +1123,7 @@ function TxnDayList({
   q,
   groupMode,
   onSelectId,
+  onSelectMerchant,
   onToggleSelected,
 }: {
   rows: ReviewListRow[];
@@ -1095,6 +1133,10 @@ function TxnDayList({
   q: string;
   groupMode: ListGroupMode;
   onSelectId: (id: number) => void;
+  /** Click on a merchant leaderboard row — opens the per-merchant detail
+   *  modal. `focusTxnId` is one of the merchant's txns (we use the first
+   *  row in the group as a stable handle for MerchantDetailView). */
+  onSelectMerchant: (counterparty: string, focusTxnId: number) => void;
   onToggleSelected: (id: number) => void;
 }) {
   const dayGroups = useMemo(
@@ -1154,31 +1196,21 @@ function TxnDayList({
               ))}
             </section>
           ))
-        : merchantGroups.map((g) => (
-            <section
-              key={g.merchant}
-              className="flex flex-col"
-              style={{ marginBottom: 18 }}
-            >
-              <ListGroupHeader
-                label={g.merchant}
+        : merchantGroups.map((g) => {
+            // First row is the freshest under the current sort (default desc);
+            // gives MerchantDetailView a sensible txn to focus on initially.
+            const focusTxnId = g.rows[0]?.id;
+            if (focusTxnId == null) return null;
+            return (
+              <MerchantLeaderRow
+                key={g.merchant}
+                merchant={g.merchant}
                 count={g.rows.length}
                 debitTotal={g.debitTotal}
+                onOpen={() => onSelectMerchant(g.merchant, focusTxnId)}
               />
-              {g.rows.map((r) => (
-                <TxnRow
-                  key={r.id}
-                  row={r}
-                  active={r.id === activeId}
-                  selected={selected.has(r.id)}
-                  q={q}
-                  showDate
-                  onOpen={() => onSelectId(r.id)}
-                  onToggleSelect={() => onToggleSelected(r.id)}
-                />
-              ))}
-            </section>
-          ))}
+            );
+          })}
       {totalMatching > rows.length && (
         <div
           className="flex items-center justify-center small muted"
@@ -1189,6 +1221,63 @@ function TxnDayList({
         </div>
       )}
     </div>
+  );
+}
+
+function MerchantLeaderRow({
+  merchant,
+  count,
+  debitTotal,
+  onOpen,
+}: {
+  merchant: string;
+  count: number;
+  debitTotal: number;
+  /** Open the per-merchant detail modal. */
+  onOpen: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="flex items-center justify-between merchant-leader-row"
+      style={{
+        padding: "12px 14px",
+        background: "var(--bg)",
+        border: "none",
+        borderBottom: "1px solid var(--border)",
+        cursor: "pointer",
+        textAlign: "left",
+        width: "100%",
+      }}
+    >
+      <div className="flex items-center gap-2.5" style={{ minWidth: 0 }}>
+        <span
+          style={{
+            fontSize: 14,
+            fontWeight: 500,
+            letterSpacing: "-0.005em",
+            color: "var(--fg)",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {merchant}
+        </span>
+        <span className="tag mono">
+          {count} txn{count === 1 ? "" : "s"}
+        </span>
+      </div>
+      <div className="flex items-center gap-3">
+        {debitTotal > 0 && (
+          <span className="num-amount muted" style={{ fontSize: 14 }}>
+            −{fmtInr(debitTotal)}
+          </span>
+        )}
+        <Ico name="chevron-right" size={13} />
+      </div>
+    </button>
   );
 }
 

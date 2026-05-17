@@ -1,30 +1,29 @@
 "use client";
 
 /**
- * MerchantDetailView — full-bleed takeover inside InboxModal that shows
- * every transaction with the current counterparty, plus insights.
+ * MerchantDetailView — full-bleed takeover inside InboxModal that answers
+ * one ADHD-friendly question for the picked counterparty:
  *
- * Opens when the user clicks the MerchantHistoryCard in the right rail. The
- * back arrow returns to the txn view; clicking a row in the list jumps to
- * that txn (which also returns us to txn mode).
+ *   "Have you paid them more, or have they paid you more — and how did
+ *    we get here?"
  *
- * Data is fetched lazily — we don't ship 500 rows into the inbox payload
- * by default, since most users never click in.
+ * Three blocks, in priority order:
+ *   1. Scoreboard      — net flow asymmetry, big and unambiguous
+ *   2. Balance ribbon  — cumulative net over time, so the user can see
+ *                        when the balance tipped
+ *   3. Timeline        — chronological list of every txn with this person,
+ *                        most recent first, with directional arrows
  *
- * Layout:
- *   1. Header strip (back · merchant name · close)
- *   2. KPI strip (total, avg, first/last, biggest)
- *   3. Monthly spend bar chart (recharts, zero-filled)
- *   4. "When you visit" — DOW always, hour-of-day when CC time data exists
- *   5. Full txn list (scrollable, clickable rows)
+ * Time-range selector at the top: 1M / 3M / 6M / 1Y / All. All client-side
+ * filtering over the lifetime data returned by `getMerchantDetail`.
  */
 
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-  Bar,
-  BarChart,
+  Area,
+  AreaChart,
   CartesianGrid,
-  Cell,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -41,7 +40,6 @@ import {
 } from "@/app/review/actions";
 import { getCategory } from "@/lib/taxonomy";
 
-const DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 const MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -117,13 +115,16 @@ export function MerchantDetailView({
           type="button"
           className="btn btn-sm ghost"
           onClick={onBack}
-          aria-label="Back to transaction"
+          aria-label="Back"
           style={{ padding: "4px 8px" }}
         >
           <Ico name="arrow-left" size={14} /> Back
         </button>
-        <div className="flex items-baseline" style={{ gap: 8, flex: 1, minWidth: 0 }}>
-          <span className="eyebrow muted">Merchant</span>
+        <div
+          className="flex items-baseline"
+          style={{ gap: 8, flex: 1, minWidth: 0 }}
+        >
+          <span className="eyebrow muted">With</span>
           <span
             className="h2"
             style={{
@@ -162,7 +163,8 @@ export function MerchantDetailView({
           </div>
         )}
         {state.kind === "loaded" && (
-          <MerchantDetailBody
+          <SettlementBody
+            counterparty={counterparty}
             detail={state.data}
             focusTxnId={focusTxnId}
             onSelectId={onSelectId}
@@ -174,809 +176,640 @@ export function MerchantDetailView({
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Settlement body — the three story blocks
+// ────────────────────────────────────────────────────────────────────────────
 
-/**
- * Drill-in filter applied across the body. Each dimension is independent;
- * a filter on multiple dimensions is interpreted as AND. Click a bar to
- * set; click the same bar again (or the chip ×) to clear that dimension.
- */
-interface MerchantFilter {
-  yearMonth: string | null;
-  dow: number | null;
-  hour: number | null;
-}
+type RangeKey = "1m" | "3m" | "6m" | "1y" | "all";
 
-const EMPTY_FILTER: MerchantFilter = {
-  yearMonth: null,
-  dow: null,
-  hour: null,
-};
+const RANGE_OPTIONS: Array<{ id: RangeKey; label: string; days: number | null }> = [
+  { id: "1m", label: "1M", days: 31 },
+  { id: "3m", label: "3M", days: 92 },
+  { id: "6m", label: "6M", days: 183 },
+  { id: "1y", label: "1Y", days: 366 },
+  { id: "all", label: "All", days: null },
+];
 
-function isFilterEmpty(f: MerchantFilter): boolean {
-  return f.yearMonth == null && f.dow == null && f.hour == null;
-}
-
-function MerchantDetailBody({
+function SettlementBody({
+  counterparty,
   detail,
   focusTxnId,
   onSelectId,
 }: {
+  counterparty: string;
   detail: MerchantDetail;
   focusTxnId: number | null;
   onSelectId: (id: number) => void;
 }) {
-  const [filter, setFilter] = useState<MerchantFilter>(EMPTY_FILTER);
+  const [range, setRange] = useState<RangeKey>("all");
 
-  // Toggle semantics — clicking an already-active bar clears that
-  // dimension. Keeps "click to drill, click to undo" as a single gesture.
-  const toggleMonth = (ym: string) =>
-    setFilter((f) => ({ ...f, yearMonth: f.yearMonth === ym ? null : ym }));
-  const toggleDow = (d: number) =>
-    setFilter((f) => ({ ...f, dow: f.dow === d ? null : d }));
-  const toggleHour = (h: number) =>
-    setFilter((f) => ({ ...f, hour: f.hour === h ? null : h }));
-  const clearDim = (dim: keyof MerchantFilter) =>
-    setFilter((f) => ({ ...f, [dim]: null }));
-  // Always-set (not toggle) variant — used by KPI tiles that should land
-  // the user in a specific month regardless of current filter state.
-  const setMonth = (ym: string) =>
-    setFilter((f) => ({ ...f, yearMonth: ym }));
-
-  const filteredTxns = useMemo(
-    () => applyFilter(detail.txns, filter),
-    [detail.txns, filter],
+  // Filter txns by the chosen window. Detail.txns are newest-first.
+  const filtered = useMemo(
+    () => filterByRange(detail.txns, range),
+    [detail.txns, range],
   );
+
+  // Sign convention: positive = inflow (they paid me); negative = outflow
+  // (I paid them). Net is sum of signed amounts.
+  const signed = useMemo(
+    () => filtered.map((t) => (t.isCredit ? t.amountInr : -t.amountInr)),
+    [filtered],
+  );
+  const totalIn = useMemo(
+    () => filtered.filter((t) => t.isCredit).reduce((s, t) => s + t.amountInr, 0),
+    [filtered],
+  );
+  const totalOut = useMemo(
+    () =>
+      filtered.filter((t) => !t.isCredit).reduce((s, t) => s + t.amountInr, 0),
+    [filtered],
+  );
+  const inCount = filtered.filter((t) => t.isCredit).length;
+  const outCount = filtered.length - inCount;
+  const net = totalIn - totalOut;
+
+  // Running balance points for the ribbon — sort asc by date, accumulate.
+  const balanceSeries = useMemo(() => {
+    const asc = [...filtered].sort((a, b) =>
+      a.txnDate < b.txnDate ? -1 : a.txnDate > b.txnDate ? 1 : 0,
+    );
+    let bal = 0;
+    return asc.map((t, idx) => {
+      bal += t.isCredit ? t.amountInr : -t.amountInr;
+      return {
+        idx,
+        date: t.txnDate,
+        balance: Math.round(bal),
+        txnSigned: Math.round(t.isCredit ? t.amountInr : -t.amountInr),
+      };
+    });
+  }, [filtered]);
 
   return (
     <div className="flex flex-col" style={{ gap: 18 }}>
-      <KpiStrip detail={detail} onSelectMonth={setMonth} />
-      <MonthlySpendChart
-        detail={detail}
-        activeMonth={filter.yearMonth}
-        onSelectMonth={toggleMonth}
+      <RangeSelector
+        range={range}
+        onChange={setRange}
+        counts={Object.fromEntries(
+          RANGE_OPTIONS.map((r) => [
+            r.id,
+            filterByRange(detail.txns, r.id).length,
+          ]),
+        )}
       />
-      <WhenYouVisit
-        detail={detail}
-        activeDow={filter.dow}
-        activeHour={filter.hour}
-        onSelectDow={toggleDow}
-        onSelectHour={toggleHour}
+
+      <Scoreboard
+        counterparty={counterparty}
+        net={net}
+        totalIn={totalIn}
+        totalOut={totalOut}
+        inCount={inCount}
+        outCount={outCount}
+        txnCount={filtered.length}
       />
-      <TxnList
-        txns={filteredTxns}
-        totalCount={detail.txns.length}
-        truncated={detail.truncated}
+
+      {balanceSeries.length >= 2 && (
+        <BalanceRibbon series={balanceSeries} />
+      )}
+
+      <TimelineList
+        counterparty={counterparty}
+        txns={filtered}
+        signed={signed}
         focusTxnId={focusTxnId}
         onSelectId={onSelectId}
-        filter={filter}
-        onClearDim={clearDim}
-        onClearAll={() => setFilter(EMPTY_FILTER)}
       />
     </div>
   );
 }
 
-function applyFilter(
-  txns: MerchantDetailTxn[],
-  f: MerchantFilter,
-): MerchantDetailTxn[] {
-  if (isFilterEmpty(f)) return txns;
-  return txns.filter((t) => {
-    if (f.yearMonth != null && t.txnDate.slice(0, 7) !== f.yearMonth) return false;
-    if (f.dow != null && dowOfIso(t.txnDate) !== f.dow) return false;
-    if (f.hour != null) {
-      const h = t.txnTime ? hourOfHHMM(t.txnTime) : null;
-      if (h !== f.hour) return false;
-    }
-    return true;
-  });
-}
-
-function dowOfIso(iso: string): number | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;
-  const ms = Date.UTC(
-    Number(iso.slice(0, 4)),
-    Number(iso.slice(5, 7)) - 1,
-    Number(iso.slice(8, 10)),
-  );
-  if (Number.isNaN(ms)) return null;
-  return new Date(ms).getUTCDay();
-}
-
-function hourOfHHMM(hhmm: string): number | null {
-  const m = /^(\d{1,2}):(\d{2})/.exec(hhmm);
-  if (!m) return null;
-  const h = Number(m[1]);
-  if (!Number.isFinite(h) || h < 0 || h > 23) return null;
-  return h;
-}
-
 // ────────────────────────────────────────────────────────────────────────────
-// KPI strip — five stat tiles. Picked to answer the questions a user asks
-// when staring at a merchant: how much in total, how much per visit, how
-// long has this been going, and what was the worst single hit.
-//
-// "Largest charge" is intentionally explicit — without the qualifier, it
-// reads like "the biggest bar in the chart," which is the monthly TOTAL,
-// not the single-txn max. The tile is also clickable: it filters the txn
-// list below to the month containing that biggest charge so the user can
-// scan to find the actual row and verify it.
+// Range selector
+// ────────────────────────────────────────────────────────────────────────────
 
-function KpiStrip({
-  detail,
-  onSelectMonth,
+function RangeSelector({
+  range,
+  onChange,
+  counts,
 }: {
-  detail: MerchantDetail;
-  onSelectMonth: (yearMonth: string) => void;
+  range: RangeKey;
+  onChange: (r: RangeKey) => void;
+  counts: Record<string, number>;
 }) {
-  const biggestYearMonth = detail.biggestDate.slice(0, 7);
   return (
     <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-        gap: 10,
-      }}
+      role="tablist"
+      aria-label="Time range"
+      className="flex items-center"
+      style={{ gap: 4 }}
     >
-      <KpiTile label="Total spent" value={fmtInr(detail.totalSpentInr)} emphasis />
-      <KpiTile
-        label="Avg / charge"
-        value={fmtInr(detail.avgInr)}
-        sub={`median ${fmtInr(detail.medianInr)}`}
-      />
-      <KpiTile
-        label="Charges"
-        value={String(detail.count)}
-        sub={detail.truncated ? "showing latest 500" : null}
-      />
-      <KpiTile
-        label="Active"
-        value={formatYearMonth(detail.firstSeen)}
-        sub={`→ ${formatYearMonth(detail.lastSeen)}`}
-      />
-      <KpiTile
-        label="Largest charge"
-        value={fmtInr(detail.biggestInr)}
-        sub={`single txn · ${formatYearMonth(detail.biggestDate)}`}
-        onClick={() => onSelectMonth(biggestYearMonth)}
-      />
-    </div>
-  );
-}
-
-function KpiTile({
-  label,
-  value,
-  sub,
-  emphasis = false,
-  onClick,
-}: {
-  label: string;
-  value: string;
-  sub?: string | null;
-  emphasis?: boolean;
-  /** When set, the tile becomes a clickable button (e.g. filter the list). */
-  onClick?: () => void;
-}) {
-  const baseStyle: CSSProperties = {
-    padding: 12,
-    display: "flex",
-    flexDirection: "column",
-    gap: 4,
-  };
-  const content = (
-    <>
-      <span className="eyebrow muted">{label}</span>
-      <span
-        className="num-amount"
-        style={{
-          fontSize: emphasis ? 22 : 18,
-          lineHeight: 1.1,
-        }}
-      >
-        {value}
-      </span>
-      {sub && <span className="tiny muted">{sub}</span>}
-    </>
-  );
-
-  if (onClick) {
-    return (
-      <button
-        type="button"
-        onClick={onClick}
-        className="surface"
-        title="Click to see this month in the list"
-        style={{
-          ...baseStyle,
-          textAlign: "left",
-          cursor: "pointer",
-          color: "inherit",
-          font: "inherit",
-          alignItems: "flex-start",
-        }}
-      >
-        {content}
-      </button>
-    );
-  }
-  return (
-    <div className="surface" style={baseStyle}>
-      {content}
+      {RANGE_OPTIONS.map((opt) => {
+        const active = opt.id === range;
+        const n = counts[opt.id] ?? 0;
+        return (
+          <button
+            key={opt.id}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(opt.id)}
+            disabled={n === 0 && !active}
+            className={`btn btn-sm ${active ? "" : "ghost"}`}
+            style={{
+              fontSize: 12,
+              padding: "4px 10px",
+              opacity: n === 0 && !active ? 0.4 : 1,
+            }}
+            title={`${n} transaction${n === 1 ? "" : "s"} in this window`}
+          >
+            {opt.label}
+            <span className="muted" style={{ marginLeft: 6, fontSize: 10 }}>
+              {n}
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Monthly spend — recharts BarChart. Empty months are zero-filled in the
-// repo so the x-axis is continuous, not just "months where you spent."
+// Scoreboard — the one-glance answer
+// ────────────────────────────────────────────────────────────────────────────
 
-function MonthlySpendChart({
-  detail,
-  activeMonth,
-  onSelectMonth,
+function Scoreboard({
+  counterparty,
+  net,
+  totalIn,
+  totalOut,
+  inCount,
+  outCount,
+  txnCount,
 }: {
-  detail: MerchantDetail;
-  activeMonth: string | null;
-  onSelectMonth: (yearMonth: string) => void;
+  counterparty: string;
+  net: number;
+  totalIn: number;
+  totalOut: number;
+  inCount: number;
+  outCount: number;
+  txnCount: number;
 }) {
-  if (detail.monthly.length === 0) return null;
-
-  const accent = readCssVar("--accent", "#b8732d");
-  const muted = readCssVar("--muted-2", "#888");
-  const border = readCssVar("--border", "rgba(120,120,120,0.2)");
-
-  const data = detail.monthly.map((m) => ({
-    yearMonth: m.yearMonth,
-    label: formatYearMonthShort(m.yearMonth),
-    out: m.totalInr,
-    txns: m.count,
-  }));
-
-  const hasActive = activeMonth != null;
-  const opacityFor = (d: (typeof data)[number]): number => {
-    if (d.txns === 0) return 0.15;
-    if (!hasActive) return 0.9;
-    return d.yearMonth === activeMonth ? 1 : 0.25;
-  };
+  const headline =
+    txnCount === 0
+      ? { label: "No transactions in this window", tone: "muted" as const }
+      : net > 0
+      ? {
+          label: `${counterparty} has paid you ₹${fmtInr(net)} more`,
+          tone: "credit" as const,
+        }
+      : net < 0
+      ? {
+          label: `You have paid ${counterparty} ₹${fmtInr(-net)} more`,
+          tone: "debit" as const,
+        }
+      : { label: "You're even", tone: "neutral" as const };
 
   return (
-    <div className="surface" style={{ padding: 14 }}>
-      <div className="flex items-baseline justify-between" style={{ gap: 8 }}>
-        <span className="eyebrow">Monthly spend</span>
-        <span className="tiny muted">
-          {detail.monthly.length} month{detail.monthly.length === 1 ? "" : "s"}
-          {" · click a bar to filter"}
+    <div
+      className="surface flex flex-col"
+      style={{ padding: 20, gap: 14 }}
+    >
+      <div className="flex flex-col" style={{ gap: 6 }}>
+        <span className="eyebrow muted">Net flow</span>
+        <span
+          style={{
+            fontSize: 22,
+            fontWeight: 600,
+            letterSpacing: "-0.02em",
+            color:
+              headline.tone === "credit"
+                ? "var(--credit)"
+                : headline.tone === "debit"
+                ? "var(--debit)"
+                : "var(--fg)",
+          }}
+        >
+          {headline.label}
         </span>
       </div>
-      <ChartFrame height={180}>
-        <ResponsiveContainer>
-          <BarChart data={data} margin={{ top: 10, right: 8, bottom: 0, left: 0 }}>
-            <CartesianGrid stroke={border} vertical={false} />
-            <XAxis
-              dataKey="label"
-              tick={{ fontSize: 11, fill: muted }}
-              tickLine={false}
-              axisLine={{ stroke: border }}
-              minTickGap={28}
-            />
-            <YAxis
-              tick={{ fontSize: 11, fill: muted }}
-              tickFormatter={(v) => fmtInr(v as number)}
-              tickLine={false}
-              axisLine={false}
-              width={60}
-            />
-            <Tooltip
-              cursor={{ fill: "var(--surface-2)", opacity: 0.5 }}
-              wrapperStyle={{ outline: "none" }}
-              contentStyle={{
-                borderRadius: 8,
-                border: "1px solid var(--border-strong)",
-                background: "var(--surface)",
-                color: "var(--fg)",
-                fontSize: 12,
-                padding: "8px 12px",
-              }}
-              labelStyle={{ color: "var(--fg-2)" }}
-              itemStyle={{ color: "var(--fg)" }}
-              formatter={(_v, _n, item) => {
-                const p = (item as { payload?: { out: number; txns: number } })
-                  ?.payload;
-                if (!p) return ["—", "Spend"];
-                return [`${fmtInr(p.out)} (${p.txns})`, "Spend"];
-              }}
-            />
-            <Bar
-              dataKey="out"
-              radius={[3, 3, 0, 0]}
-              onClick={(payload: unknown) => {
-                // recharts passes the row payload through; only navigate on
-                // months with actual charges (zero-fill bars are display-only).
-                const p = payload as { yearMonth?: string; txns?: number } | null;
-                if (p?.yearMonth && (p.txns ?? 0) > 0) {
-                  onSelectMonth(p.yearMonth);
-                }
-              }}
-              style={{ cursor: "pointer" }}
-            >
-              {data.map((d) => (
-                <Cell
-                  key={d.yearMonth}
-                  fill={accent}
-                  fillOpacity={opacityFor(d)}
-                  // Force the per-month cursor — empty months shouldn't
-                  // look interactive, since their click is a no-op.
-                  cursor={d.txns > 0 ? "pointer" : "default"}
-                />
-              ))}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      </ChartFrame>
+
+      {txnCount > 0 && (
+        <div
+          className="flex items-stretch"
+          style={{
+            gap: 14,
+            paddingTop: 6,
+            borderTop: "1px solid var(--border)",
+          }}
+        >
+          <FlowSide
+            label="You paid"
+            counterparty={counterparty}
+            amount={totalOut}
+            count={outCount}
+            direction="out"
+          />
+          <div
+            aria-hidden
+            style={{
+              width: 1,
+              background: "var(--border)",
+              alignSelf: "stretch",
+            }}
+          />
+          <FlowSide
+            label="Paid you"
+            counterparty={counterparty}
+            amount={totalIn}
+            count={inCount}
+            direction="in"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FlowSide({
+  label,
+  counterparty,
+  amount,
+  count,
+  direction,
+}: {
+  label: string;
+  counterparty: string;
+  amount: number;
+  count: number;
+  direction: "in" | "out";
+}) {
+  return (
+    <div className="flex flex-col" style={{ flex: 1, gap: 4, minWidth: 0 }}>
+      <div className="small muted flex items-center" style={{ gap: 6 }}>
+        <Ico name={direction === "out" ? "arrow-right" : "arrow-left"} size={11} />
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {label} {direction === "out" ? "→" : "←"} {counterparty}
+        </span>
+      </div>
+      <span
+        className={`num-amount ${direction === "out" ? "debit" : "credit"}`}
+        style={{ fontSize: 18, fontWeight: 600 }}
+      >
+        {direction === "out" ? "−" : "+"}₹{fmtInr(amount)}
+      </span>
+      <span className="small muted">
+        {count} txn{count === 1 ? "" : "s"}
+      </span>
     </div>
   );
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// "When you visit" — two inline bar lanes. Custom-drawn so we can fit both
-// side by side in a tight grid without dragging in another recharts setup.
+// Balance ribbon — running net over time
+// ────────────────────────────────────────────────────────────────────────────
 
-function WhenYouVisit({
-  detail,
-  activeDow,
-  activeHour,
-  onSelectDow,
-  onSelectHour,
+interface BalancePoint {
+  idx: number;
+  date: string;
+  balance: number;
+  txnSigned: number;
+}
+
+function BalanceRibbon({ series }: { series: BalancePoint[] }) {
+  const maxAbs = Math.max(
+    1,
+    ...series.map((p) => Math.abs(p.balance)),
+  );
+  const creditColor = readCssVar("--credit", "#3fbf7f");
+  const debitColor = readCssVar("--debit", "#e15c5c");
+
+  return (
+    <section
+      className="surface flex flex-col"
+      style={{ padding: 16, gap: 6 }}
+    >
+      <div className="flex flex-col" style={{ gap: 2 }}>
+        <span className="eyebrow muted">Running balance over time</span>
+        <span className="small muted">
+          Above zero — they&apos;ve paid more · Below zero — you&apos;ve paid more
+        </span>
+      </div>
+      <ChartFrame height={172}>
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart
+            data={series}
+            margin={{ top: 6, right: 8, left: 0, bottom: 6 }}
+          >
+            <defs>
+              <linearGradient id="balPos" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={creditColor} stopOpacity={0.35} />
+                <stop offset="100%" stopColor={creditColor} stopOpacity={0} />
+              </linearGradient>
+              <linearGradient id="balNeg" x1="0" y1="1" x2="0" y2="0">
+                <stop offset="0%" stopColor={debitColor} stopOpacity={0.35} />
+                <stop offset="100%" stopColor={debitColor} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
+            <XAxis
+              dataKey="date"
+              tickFormatter={(d: string) => fmtBalanceTick(d)}
+              minTickGap={32}
+              tick={{ fill: "var(--muted)", fontSize: 11 }}
+              axisLine={{ stroke: "var(--border)" }}
+              tickLine={false}
+            />
+            <YAxis
+              domain={[-maxAbs, maxAbs]}
+              tickFormatter={(v: number) =>
+                v === 0 ? "0" : `${v > 0 ? "+" : "−"}₹${fmtInrShort(Math.abs(v))}`
+              }
+              tick={{ fill: "var(--muted)", fontSize: 11 }}
+              axisLine={false}
+              tickLine={false}
+              width={62}
+            />
+            <Tooltip
+              cursor={{ stroke: "var(--border)", strokeWidth: 1 }}
+              content={<BalanceTooltip />}
+            />
+            <ReferenceLine y={0} stroke="var(--fg)" strokeOpacity={0.4} />
+            <Area
+              type="monotone"
+              dataKey="balance"
+              stroke={creditColor}
+              strokeWidth={1.5}
+              fill="url(#balPos)"
+              isAnimationActive={false}
+              activeDot={{ r: 3 }}
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+      </ChartFrame>
+    </section>
+  );
+}
+
+function BalanceTooltip({
+  active,
+  payload,
 }: {
-  detail: MerchantDetail;
-  activeDow: number | null;
-  activeHour: number | null;
-  onSelectDow: (dow: number) => void;
-  onSelectHour: (hour: number) => void;
+  active?: boolean;
+  payload?: Array<{ payload?: BalancePoint }>;
 }) {
-  const hasHour = detail.hour.length > 0;
-  const dowMaxCount = Math.max(...detail.dow.map((d) => d.count), 1);
-  const hourMaxCount = hasHour
-    ? Math.max(...detail.hour.map((h) => h.count), 1)
-    : 1;
-
+  if (!active || !payload?.length) return null;
+  const p = payload[0]?.payload;
+  if (!p) return null;
+  const balLabel =
+    p.balance === 0
+      ? "Even"
+      : p.balance > 0
+      ? `They ahead by ₹${fmtInr(p.balance)}`
+      : `You ahead by ₹${fmtInr(-p.balance)}`;
   return (
     <div
       className="surface"
-      style={{
-        padding: 14,
-        display: "grid",
-        gridTemplateColumns: hasHour ? "1fr 1fr" : "1fr",
-        gap: 18,
-      }}
+      style={{ padding: "6px 9px", fontSize: 11.5, lineHeight: 1.45 }}
     >
-      <div className="flex flex-col" style={{ gap: 8 }}>
-        <div
-          className="flex items-baseline justify-between"
-          style={{ gap: 8 }}
-        >
-          <span className="eyebrow">Day of week</span>
-          <span className="tiny muted">click to filter</span>
-        </div>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(7, 1fr)",
-            gap: 4,
-            alignItems: "end",
-            height: 80,
-          }}
-        >
-          {detail.dow.map((d) => (
-            <BarColumn
-              key={d.dow}
-              ratio={d.count / dowMaxCount}
-              label={DOW_LABELS[d.dow] ?? String(d.dow)}
-              value={String(d.count)}
-              active={activeDow === d.dow}
-              dimmed={activeDow != null && activeDow !== d.dow}
-              onClick={d.count > 0 ? () => onSelectDow(d.dow) : undefined}
-            />
-          ))}
-        </div>
+      <div className="muted">{fmtBalanceTick(p.date)}</div>
+      <div>{balLabel}</div>
+      <div className={p.txnSigned >= 0 ? "credit" : "debit"}>
+        {p.txnSigned >= 0 ? "+" : "−"}₹{fmtInr(Math.abs(p.txnSigned))} this txn
       </div>
-
-      {hasHour && (
-        <div className="flex flex-col" style={{ gap: 8 }}>
-          <div
-            className="flex items-baseline justify-between"
-            style={{ gap: 8 }}
-          >
-            <span className="eyebrow">Hour of day</span>
-            <span className="tiny muted">click to filter</span>
-          </div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(24, 1fr)",
-              gap: 2,
-              alignItems: "end",
-              height: 80,
-            }}
-          >
-            {detail.hour.map((h) => (
-              <BarColumn
-                key={h.hour}
-                ratio={h.count / hourMaxCount}
-                label={h.hour % 6 === 0 ? String(h.hour) : ""}
-                value={String(h.count)}
-                compact
-                active={activeHour === h.hour}
-                dimmed={activeHour != null && activeHour !== h.hour}
-                onClick={h.count > 0 ? () => onSelectHour(h.hour) : undefined}
-              />
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
-function BarColumn({
-  ratio,
-  label,
-  value,
-  compact = false,
-  active = false,
-  dimmed = false,
-  onClick,
-}: {
-  ratio: number;
-  label: string;
-  value: string;
-  compact?: boolean;
-  active?: boolean;
-  dimmed?: boolean;
-  onClick?: () => void;
-}) {
-  // Minimum 2px so empty buckets still register visually.
-  const heightPct = Math.max(ratio * 100, ratio > 0 ? 4 : 2);
-  const baseOpacity = ratio > 0 ? 0.9 : 0.4;
-  const opacity = active ? 1 : dimmed ? 0.25 : baseOpacity;
-  const clickable = onClick != null;
-
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={!clickable}
-      className="flex flex-col"
-      title={`${label || ""}: ${value}`}
-      style={{
-        alignItems: "center",
-        gap: 4,
-        height: "100%",
-        padding: 0,
-        background: "transparent",
-        border: "none",
-        cursor: clickable ? "pointer" : "default",
-        color: "inherit",
-        font: "inherit",
-      }}
-    >
-      <div
-        style={{
-          flex: 1,
-          width: "100%",
-          display: "flex",
-          alignItems: "flex-end",
-        }}
-      >
-        <div
-          style={{
-            width: "100%",
-            height: `${heightPct}%`,
-            background: ratio > 0 ? "var(--accent)" : "var(--border)",
-            borderRadius: 2,
-            opacity,
-            outline: active ? "1px solid var(--accent)" : "none",
-            outlineOffset: 1,
-            transition: "opacity 0.12s ease",
-          }}
-        />
-      </div>
-      {!compact && (
-        <span className="tiny muted" style={{ fontSize: 10 }}>
-          {label}
-        </span>
-      )}
-      {compact && label && (
-        <span className="tiny muted" style={{ fontSize: 9 }}>
-          {label}
-        </span>
-      )}
-    </button>
-  );
-}
-
 // ────────────────────────────────────────────────────────────────────────────
-// Full txn list. Each row links to the inbox view of that txn.
+// Timeline list — chronological story
+// ────────────────────────────────────────────────────────────────────────────
 
-function TxnList({
+function TimelineList({
+  counterparty,
   txns,
-  totalCount,
-  truncated,
+  signed,
   focusTxnId,
   onSelectId,
-  filter,
-  onClearDim,
-  onClearAll,
 }: {
+  counterparty: string;
   txns: MerchantDetailTxn[];
-  /** Pre-filter count, for the "M of N" subhead. */
-  totalCount: number;
-  truncated: boolean;
+  signed: number[];
   focusTxnId: number | null;
   onSelectId: (id: number) => void;
-  filter: MerchantFilter;
-  onClearDim: (dim: keyof MerchantFilter) => void;
-  onClearAll: () => void;
 }) {
-  const filterActive = !isFilterEmpty(filter);
-  return (
-    <div className="surface" style={{ padding: 14 }}>
-      <div
-        className="flex items-baseline justify-between"
-        style={{ gap: 8, marginBottom: 10 }}
-      >
-        <span className="eyebrow">
-          {filterActive ? "Filtered charges" : "All charges"}
-        </span>
-        <span className="tiny muted">
-          {filterActive ? `${txns.length} of ${totalCount}` : `${txns.length}`}
-          {truncated && " (latest 500)"}
-        </span>
+  if (txns.length === 0) {
+    return (
+      <div className="surface-dashed flex items-center justify-center" style={{ padding: 28 }}>
+        <span className="small muted">No transactions in this window.</span>
       </div>
-      {filterActive && (
-        <FilterChips
-          filter={filter}
-          onClearDim={onClearDim}
-          onClearAll={onClearAll}
-        />
-      )}
-      {txns.length === 0 ? (
-        <div
-          className="flex items-center justify-center"
-          style={{
-            padding: "24px 8px",
-            color: "var(--fg-muted)",
-            fontSize: 13,
-          }}
-        >
-          No charges match this filter.
-        </div>
-      ) : (
-        <div className="flex flex-col" style={{ gap: 2 }}>
-          {txns.map((t) => (
-            <TxnRow
-              key={t.id}
-              txn={t}
-              isFocus={t.id === focusTxnId}
-              onClick={() => onSelectId(t.id)}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/**
- * Shows the active dimensions of the merchant filter as removable chips,
- * with a "clear all" affordance when more than one dimension is set.
- * Hidden entirely when the filter is empty (handled by caller).
- */
-function FilterChips({
-  filter,
-  onClearDim,
-  onClearAll,
-}: {
-  filter: MerchantFilter;
-  onClearDim: (dim: keyof MerchantFilter) => void;
-  onClearAll: () => void;
-}) {
-  const dims: Array<{ key: keyof MerchantFilter; label: string }> = [];
-  if (filter.yearMonth) {
-    dims.push({
-      key: "yearMonth",
-      label: formatYearMonth(`${filter.yearMonth}-01`),
-    });
+    );
   }
-  if (filter.dow != null) {
-    dims.push({
-      key: "dow",
-      label: DOW_LABELS[filter.dow] ?? `Day ${filter.dow}`,
-    });
-  }
-  if (filter.hour != null) {
-    dims.push({
-      key: "hour",
-      label: `${String(filter.hour).padStart(2, "0")}:00`,
-    });
-  }
-  if (dims.length === 0) return null;
 
   return (
-    <div
-      className="flex items-center"
-      style={{ gap: 6, marginBottom: 10, flexWrap: "wrap" }}
-    >
-      <span className="tiny muted">Showing:</span>
-      {dims.map((d) => (
-        <button
-          key={d.key}
-          type="button"
-          onClick={() => onClearDim(d.key)}
-          className="flex items-center"
-          aria-label={`Clear ${d.label} filter`}
-          style={{
-            gap: 4,
-            padding: "2px 8px",
-            borderRadius: 999,
-            background: "var(--accent-soft)",
-            border: "1px solid var(--accent-line)",
-            color: "var(--fg)",
-            font: "inherit",
-            fontSize: 11,
-            cursor: "pointer",
-          }}
-        >
-          {d.label}
-          <Ico name="x" size={10} />
-        </button>
-      ))}
-      {dims.length > 1 && (
-        <button
-          type="button"
-          onClick={onClearAll}
-          className="tiny"
-          style={{
-            background: "transparent",
-            border: "none",
-            color: "var(--fg-muted)",
-            cursor: "pointer",
-            padding: "2px 4px",
-            textDecoration: "underline",
-          }}
-        >
-          clear all
-        </button>
-      )}
-    </div>
+    <section className="flex flex-col" style={{ gap: 6 }}>
+      <div className="eyebrow muted">Timeline · most recent first</div>
+      <ul
+        className="flex flex-col"
+        style={{
+          margin: 0,
+          padding: 0,
+          listStyle: "none",
+          border: "1px solid var(--border)",
+          borderRadius: 8,
+          overflow: "hidden",
+        }}
+      >
+        {txns.map((t, i) => (
+          <TimelineRow
+            key={t.id}
+            txn={t}
+            counterparty={counterparty}
+            isLast={i === txns.length - 1}
+            isFocused={t.id === focusTxnId}
+            onSelect={() => onSelectId(t.id)}
+            runningBalanceAtThisPoint={signed
+              .slice(i)
+              .reduce((s, v) => s + v, 0)}
+          />
+        ))}
+      </ul>
+    </section>
   );
 }
 
-function TxnRow({
+function TimelineRow({
   txn,
-  isFocus,
-  onClick,
+  counterparty,
+  isLast,
+  isFocused,
+  onSelect,
+  runningBalanceAtThisPoint,
 }: {
   txn: MerchantDetailTxn;
-  isFocus: boolean;
-  onClick: () => void;
+  counterparty: string;
+  isLast: boolean;
+  isFocused: boolean;
+  onSelect: () => void;
+  runningBalanceAtThisPoint: number;
 }) {
-  const cat = txn.category ? getCategory(txn.category) : null;
+  const cat = getCategory(txn.category);
+  const directionLabel = txn.isCredit
+    ? `${counterparty} → You`
+    : `You → ${counterparty}`;
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex items-center"
-      style={{
-        gap: 10,
-        padding: "8px 10px",
-        borderRadius: 6,
-        background: isFocus ? "var(--accent-soft)" : "transparent",
-        border: isFocus
-          ? "1px solid var(--accent-line)"
-          : "1px solid transparent",
-        textAlign: "left",
-        cursor: "pointer",
-        color: "inherit",
-        font: "inherit",
-        width: "100%",
-      }}
-      onMouseEnter={(e) => {
-        if (!isFocus) {
-          (e.currentTarget as HTMLElement).style.background = "var(--surface-2)";
-        }
-      }}
-      onMouseLeave={(e) => {
-        if (!isFocus) {
-          (e.currentTarget as HTMLElement).style.background = "transparent";
-        }
-      }}
-    >
-      <span
-        className="mono small muted"
-        style={{ minWidth: 84, flex: "0 0 auto" }}
-      >
-        {txn.txnDate}
-      </span>
-      <span
-        className="mono tiny muted"
-        style={{ minWidth: 44, flex: "0 0 auto" }}
-      >
-        {txn.txnTime ?? "—"}
-      </span>
-      <span
-        className="num-amount"
+    <li>
+      <button
+        type="button"
+        onClick={onSelect}
+        className="flex items-center"
         style={{
-          minWidth: 80,
-          flex: "0 0 auto",
-          fontSize: 13,
-          color: txn.isCredit ? "var(--credit)" : "var(--fg)",
+          width: "100%",
+          gap: 12,
+          padding: "10px 14px",
+          background: isFocused ? "var(--accent-soft)" : "var(--bg)",
+          border: "none",
+          borderBottom: isLast ? "none" : "1px solid var(--border)",
+          cursor: "pointer",
+          textAlign: "left",
         }}
+        title={
+          runningBalanceAtThisPoint === 0
+            ? "Even after this txn"
+            : runningBalanceAtThisPoint > 0
+            ? `After this: they ahead by ₹${fmtInr(runningBalanceAtThisPoint)}`
+            : `After this: you ahead by ₹${fmtInr(-runningBalanceAtThisPoint)}`
+        }
       >
-        {txn.isCredit ? "+" : "−"}
-        {fmtInr(txn.amountInr)}
-      </span>
-      <span
-        className="small"
-        style={{
-          flex: "1 1 auto",
-          minWidth: 0,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          color: cat ? "var(--fg)" : "var(--fg-muted)",
-        }}
-      >
-        {cat?.label ?? "Uncategorized"}
-      </span>
-      <span className="tiny muted" style={{ flex: "0 0 auto" }}>
-        {txn.accountBank} · {txn.accountLast4}
-      </span>
-      {isFocus && (
         <span
-          className="tiny"
-          style={{ flex: "0 0 auto", color: "var(--accent)" }}
+          aria-hidden
+          style={{
+            width: 22,
+            height: 22,
+            borderRadius: 6,
+            background: txn.isCredit ? "var(--credit-soft, rgba(63,191,127,0.16))" : "var(--debit-soft, rgba(225,92,92,0.14))",
+            color: txn.isCredit ? "var(--credit)" : "var(--debit)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+          }}
         >
-          this one
+          <Ico name={txn.isCredit ? "arrow-left" : "arrow-right"} size={12} />
         </span>
-      )}
-    </button>
+        <span
+          className="mono tabular muted"
+          style={{ fontSize: 11.5, width: 86, flexShrink: 0 }}
+        >
+          {fmtRowDate(txn.txnDate)}
+          {txn.txnTime ? ` · ${txn.txnTime}` : ""}
+        </span>
+        <span
+          className="flex flex-col"
+          style={{ flex: 1, minWidth: 0, gap: 2 }}
+        >
+          <span
+            style={{
+              fontSize: 13,
+              color: "var(--fg)",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {directionLabel}
+          </span>
+          {txn.narration && (
+            <span
+              className="small muted"
+              style={{
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+              title={txn.narration}
+            >
+              {txn.narration}
+            </span>
+          )}
+        </span>
+        <span
+          className="chip chip-sm"
+          style={{
+            fontSize: 11,
+            minWidth: 0,
+            maxWidth: 160,
+            justifyContent: "flex-start",
+          }}
+        >
+          <span aria-hidden>{cat.emoji}</span>
+          <span
+            style={{
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {txn.category ?? "Uncategorized"}
+          </span>
+        </span>
+        <span
+          className={`num-amount ${txn.isCredit ? "credit" : "debit"}`}
+          style={{ fontSize: 14, fontWeight: 500, minWidth: 96, textAlign: "right" }}
+        >
+          {txn.isCredit ? "+" : "−"}₹{fmtInr(txn.amountInr)}
+        </span>
+      </button>
+    </li>
   );
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ────────────────────────────────────────────────────────────────────────────
 
-function LoadingSkeleton() {
-  return (
-    <div className="flex flex-col" style={{ gap: 14 }}>
-      {[180, 200, 280].map((h, i) => (
-        <div
-          key={i}
-          aria-hidden
-          style={{
-            height: h,
-            width: "100%",
-            background: "var(--surface-2)",
-            borderRadius: 8,
-            opacity: 0.6,
-          }}
-        />
-      ))}
-    </div>
-  );
+function filterByRange(
+  txns: MerchantDetailTxn[],
+  range: RangeKey,
+): MerchantDetailTxn[] {
+  const opt = RANGE_OPTIONS.find((r) => r.id === range);
+  if (!opt || opt.days == null) return txns;
+  if (txns.length === 0) return txns;
+  // Anchor the window to the most-recent txn in the dataset, not "now" —
+  // it's more useful for review (e.g. data ends in May but you're looking
+  // in November). Date math in UTC to stay TZ-stable.
+  const newest = txns
+    .map((t) => parseIsoDate(t.txnDate))
+    .reduce<Date | null>((a, b) => (a && (!b || a > b) ? a : b ?? a), null);
+  if (!newest) return txns;
+  const cutoff = new Date(newest.getTime() - opt.days * 86_400_000);
+  return txns.filter((t) => {
+    const d = parseIsoDate(t.txnDate);
+    return d ? d >= cutoff : false;
+  });
 }
 
-function formatYearMonth(iso: string): string {
-  const [y, m] = iso.split("-").map(Number);
-  if (!y || !m) return iso;
-  return `${MONTHS[m - 1]} '${String(y).slice(-2)}`;
+function parseIsoDate(iso: string): Date | null {
+  const [y, m, d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return null;
+  return new Date(Date.UTC(y, m - 1, d));
 }
 
-function formatYearMonthShort(ym: string): string {
-  const [y, m] = ym.split("-").map(Number);
-  if (!y || !m) return ym;
-  return `${MONTHS[m - 1]} ${String(y).slice(-2)}`;
+function fmtRowDate(iso: string): string {
+  const [, m, d] = iso.split("-").map(Number);
+  if (!m || !d) return iso;
+  return `${d} ${MONTHS[m - 1]}`;
+}
+
+function fmtBalanceTick(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return iso;
+  return `${d} ${MONTHS[m - 1]} ${String(y).slice(-2)}`;
+}
+
+function fmtInrShort(n: number): string {
+  if (n >= 1e7) return `${(n / 1e7).toFixed(1)}Cr`;
+  if (n >= 1e5) return `${(n / 1e5).toFixed(1)}L`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
+  return String(Math.round(n));
 }
 
 function readCssVar(name: string, fallback: string): string {
@@ -985,4 +818,27 @@ function readCssVar(name: string, fallback: string): string {
   }
   const v = getComputedStyle(document.documentElement).getPropertyValue(name);
   return v.trim() || fallback;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Loading
+// ────────────────────────────────────────────────────────────────────────────
+
+function LoadingSkeleton() {
+  return (
+    <div className="flex flex-col" style={{ gap: 18 }}>
+      <div className="flex" style={{ gap: 4 }}>
+        {RANGE_OPTIONS.map((r) => (
+          <div
+            key={r.id}
+            className="skeleton"
+            style={{ height: 26, width: 48, borderRadius: 8 }}
+          />
+        ))}
+      </div>
+      <div className="skeleton" style={{ height: 132, borderRadius: 10 }} />
+      <div className="skeleton" style={{ height: 180, borderRadius: 10 }} />
+      <div className="skeleton" style={{ height: 240, borderRadius: 8 }} />
+    </div>
+  );
 }
