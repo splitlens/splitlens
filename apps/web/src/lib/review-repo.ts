@@ -1880,6 +1880,18 @@ export interface SplitQueueRow {
   /** Display name of the person we'd default the split to. Null when
    *  no obvious split target exists (e.g. a large Zepto order). */
   suggestedSplitWith: string | null;
+  /** Mirrors transactions.reviewed. The Show-all toggle surfaces
+   *  rows where this is true; the queue's Row component renders
+   *  them with a "reviewed" badge instead of the "choose split" pill
+   *  so the user can tell at a glance which are still candidates. */
+  reviewed: boolean;
+  /** Total split divisor (1 = just me, 2+ = shared). Lets the Row
+   *  component show "split N-way" instead of "choose split" when
+   *  the txn already has a split set. */
+  shareCount: number;
+  /** Friends this txn is already split with — for the "split with X, Y"
+   *  visual chip on already-split rows. */
+  sharedWith: string[];
 }
 
 /**
@@ -1898,87 +1910,11 @@ export interface SplitQueueRow {
  * Reviewed=1 rows are excluded throughout. The queue is intentionally
  * un-paginated for now — local dataset, max a few hundred rows.
  */
-export async function getSplitQueueRows(
-  largeThreshold: number = 1000,
-): Promise<SplitQueueRow[]> {
-  const db = openDb();
-  // Pull the union once, then categorize in JS. Cheaper than three
-  // round-trips since most predicates hit the same indexed columns.
-  const rows = db.all<{
-    id: number;
-    txn_date: string;
-    txn_time: string | null;
-    withdrawal: number | null;
-    deposit: number | null;
-    counterparty: string;
-    counterparty_kind: string | null;
-    person_id: string | null;
-    category: string | null;
-    recurrence: string | null;
-    share_count: number | null;
-  }>(sql`
-    SELECT id, txn_date, txn_time, withdrawal, deposit,
-           counterparty, counterparty_kind, person_id, category,
-           recurrence, share_count
-    FROM transactions
-    WHERE reviewed = 0
-      AND counterparty IS NOT NULL
-      AND counterparty != ''
-      AND (
-        -- (1) Person-kind un-split
-        (counterparty_kind = 'person' AND (share_count IS NULL OR share_count = 1))
-        -- (2) Large un-reviewed
-        OR (COALESCE(withdrawal, deposit, 0) >= ${largeThreshold})
-        -- (3) Recurring monthly with a person
-        OR (recurrence IN ('monthly', 'weekly', 'quarterly')
-            AND counterparty_kind = 'person')
-      )
-    ORDER BY txn_date DESC, COALESCE(txn_time, '00:00') DESC, id DESC
-  `);
-
-  // Pre-resolve suggested-split target display names. We hit
-  // DEFAULT_PEOPLE in core for the canonical id→name map.
-  const { DEFAULT_PEOPLE } = await import("@splitlens/core");
-  const personIdToName = new Map(
-    DEFAULT_PEOPLE.map((p: { id: string; displayName: string }) => [
-      p.id,
-      p.displayName,
-    ]),
-  );
-
-  return rows.map((r) => {
-    const amount = r.withdrawal ?? r.deposit ?? 0;
-    const direction: "debit" | "credit" = r.withdrawal ? "debit" : "credit";
-    // Priority: person > recurring > large.
-    let reason: SplitQueueRow["reason"] = "large";
-    if (r.counterparty_kind === "person") {
-      reason =
-        r.recurrence === "monthly" ||
-        r.recurrence === "weekly" ||
-        r.recurrence === "quarterly"
-          ? "recurring"
-          : "person";
-    }
-    const suggestedSplitWith =
-      r.person_id && personIdToName.get(r.person_id)
-        ? personIdToName.get(r.person_id)!
-        : null;
-    return {
-      id: r.id,
-      txnDate: r.txn_date,
-      txnTime: r.txn_time,
-      amount,
-      direction,
-      counterparty: r.counterparty,
-      counterpartyKind: r.counterparty_kind,
-      personId: r.person_id,
-      category: r.category,
-      recurrence: r.recurrence,
-      reason,
-      suggestedSplitWith,
-    };
-  });
-}
+// Note: server-side getSplitQueueRows was removed once /review/split
+// moved to client-side filtering + categorization (commit 95987b5).
+// The SplitQueueRow type is still exported and used as the row shape
+// by SplitQueueClient — it's just constructed in-browser from
+// getAllClientReviewRows() now.
 
 /**
  * Fetch the active rule state for a counterparty (all three
@@ -2065,6 +2001,9 @@ export interface ClientReviewRow {
   narration: string | null;
   category: string | null;
   shareCount: number;
+  /** Friends this txn is already split with (JSON-decoded from
+   *  transactions.shared_with). Empty array = just-me / no split set. */
+  sharedWith: string[];
   reviewed: boolean;
   recurrence: string | null;
   sourceCount: number;
@@ -2103,6 +2042,7 @@ export async function getAllClientReviewRows(): Promise<ClientReviewRow[]> {
     narration: string | null;
     category: string | null;
     share_count: number;
+    shared_with: string | null;
     reviewed: number;
     recurrence: string | null;
     source_count: number;
@@ -2110,7 +2050,7 @@ export async function getAllClientReviewRows(): Promise<ClientReviewRow[]> {
   }>(sql`
     SELECT t.id, t.account_id, t.txn_date, t.txn_time, t.withdrawal, t.deposit,
            t.counterparty, t.counterparty_kind, t.person_id, t.narration,
-           t.category, t.share_count, t.reviewed, t.recurrence,
+           t.category, t.share_count, t.shared_with, t.reviewed, t.recurrence,
            (SELECT count(DISTINCT source_type) FROM transaction_sources
               WHERE transaction_id = t.id) AS source_count,
            EXISTS (
@@ -2122,24 +2062,40 @@ export async function getAllClientReviewRows(): Promise<ClientReviewRow[]> {
     FROM transactions t
     ORDER BY t.txn_date DESC, COALESCE(t.txn_time, '00:00') DESC, t.id DESC
   `);
-  return rows.map((r) => ({
-    id: r.id,
-    accountId: r.account_id,
-    txnDate: r.txn_date,
-    txnTime: r.txn_time,
-    amount: r.withdrawal ?? r.deposit ?? 0,
-    direction: r.withdrawal ? "debit" : "credit",
-    counterparty: r.counterparty,
-    counterpartyKind: r.counterparty_kind,
-    personId: r.person_id,
-    narration: r.narration,
-    category: r.category,
-    shareCount: r.share_count,
-    reviewed: !!r.reviewed,
-    recurrence: r.recurrence,
-    sourceCount: Number(r.source_count),
-    hasReceipt: !!r.has_receipt,
-  }));
+  return rows.map((r) => {
+    // shared_with on the txns table is stored as a JSON-encoded text
+    // array (matches the InboxModal save shape). Decode defensively;
+    // pre-rules rows may have CSV or a stray scalar — treat anything
+    // we can't parse as no-split.
+    let sharedWith: string[] = [];
+    if (r.shared_with) {
+      try {
+        const parsed = JSON.parse(r.shared_with);
+        if (Array.isArray(parsed)) sharedWith = parsed.map(String);
+      } catch {
+        // fall through; empty list
+      }
+    }
+    return {
+      id: r.id,
+      accountId: r.account_id,
+      txnDate: r.txn_date,
+      txnTime: r.txn_time,
+      amount: r.withdrawal ?? r.deposit ?? 0,
+      direction: r.withdrawal ? "debit" : "credit",
+      counterparty: r.counterparty,
+      counterpartyKind: r.counterparty_kind,
+      personId: r.person_id,
+      narration: r.narration,
+      category: r.category,
+      shareCount: r.share_count,
+      sharedWith,
+      reviewed: !!r.reviewed,
+      recurrence: r.recurrence,
+      sourceCount: Number(r.source_count),
+      hasReceipt: !!r.has_receipt,
+    } satisfies ClientReviewRow;
+  });
 }
 
 /**

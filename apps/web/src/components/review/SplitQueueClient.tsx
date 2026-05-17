@@ -67,11 +67,13 @@ export function SplitQueueClient({
   // and sync back to the URL on a debounced effect.
   const [filter, setLocalFilter] = useState<ReviewListFilter>(initialFilter);
 
-  // Toggle: include rows the user already marked reviewed? Off by
-  // default so the queue surfaces just the un-reviewed candidates,
-  // matching the original "fresh inbox" intent. Flip on to retroactively
-  // split a row that was marked reviewed-as-personal earlier.
-  const [includeReviewed, setIncludeReviewed] = useState(false);
+  // Toggle: show everything in the slice, including rows already
+  // marked reviewed or already split? Off by default so the queue
+  // surfaces just the open candidates (the "fresh inbox" intent).
+  // Flip on to see all counterparty txns in the slice — useful when
+  // every txn in the active filter is already done and the user
+  // wants to verify or edit existing splits.
+  const [showAll, setShowAll] = useState(false);
 
   const filteredRows = useMemo(
     () => applyClientFilter(allRows, filter),
@@ -102,12 +104,15 @@ export function SplitQueueClient({
     const recurringRows: SplitQueueRow[] = [];
     const largeRows: SplitQueueRow[] = [];
     for (const r of filteredRows) {
-      // The reviewed filter is the toggleable one. Already-split rows
-      // (shareCount > 1) are always hidden — those are done; surfacing
-      // them in the "candidates" queue would be noise. To EDIT an
-      // existing split, the user goes to /review/category or /friends.
-      if (!includeReviewed && r.reviewed) continue;
-      if ((r.shareCount ?? 1) > 1) continue;
+      // Default mode = "candidates only": un-reviewed AND un-split.
+      // Show-all mode = include everything in the slice (reviewed and
+      // already-split rows are still rendered so the user can verify
+      // or edit existing decisions). Empty counterparties are never
+      // shown either way — there's nothing meaningful to split.
+      if (!showAll) {
+        if (r.reviewed) continue;
+        if ((r.shareCount ?? 1) > 1) continue;
+      }
       if (!r.counterparty || r.counterparty === "") continue;
 
       const isPersonKind = r.counterpartyKind === "person";
@@ -151,6 +156,9 @@ export function SplitQueueClient({
         recurrence: r.recurrence,
         reason,
         suggestedSplitWith,
+        reviewed: r.reviewed,
+        shareCount: r.shareCount ?? 1,
+        sharedWith: r.sharedWith ?? [],
       };
 
       if (reason === "person") personRows.push(queueRow);
@@ -165,7 +173,7 @@ export function SplitQueueClient({
     recurringRows.sort(sortDesc);
     largeRows.sort(sortDesc);
     return { personRows, recurringRows, largeRows };
-  }, [filteredRows, largeThreshold, peopleByPersonId, includeReviewed]);
+  }, [filteredRows, largeThreshold, peopleByPersonId, showAll]);
 
   const flat = useMemo(
     () => [...personRows, ...recurringRows, ...largeRows],
@@ -301,28 +309,24 @@ export function SplitQueueClient({
             <button
               type="button"
               className="btn btn-sm outline"
-              onClick={() => setIncludeReviewed((v) => !v)}
-              aria-pressed={includeReviewed}
+              onClick={() => setShowAll((v) => !v)}
+              aria-pressed={showAll}
               title={
-                includeReviewed
-                  ? "Currently showing reviewed-as-personal rows too"
-                  : "Also surface rows you marked reviewed-as-personal"
+                showAll
+                  ? "Showing every counterparty txn in the slice, including reviewed and already-split"
+                  : "Also surface reviewed-as-personal and already-split rows"
               }
               style={{
-                background: includeReviewed
-                  ? "var(--accent-soft)"
-                  : "transparent",
-                borderColor: includeReviewed
-                  ? "var(--accent-line)"
-                  : undefined,
-                color: includeReviewed ? "var(--accent)" : undefined,
+                background: showAll ? "var(--accent-soft)" : "transparent",
+                borderColor: showAll ? "var(--accent-line)" : undefined,
+                color: showAll ? "var(--accent)" : undefined,
               }}
             >
               <Ico
-                name={includeReviewed ? "check" : "eye"}
+                name={showAll ? "check" : "eye"}
                 size={13}
               />
-              {includeReviewed ? "Reviewed included" : "Include reviewed"}
+              {showAll ? "Showing all" : "Show all"}
             </button>
             <Link href="/friends" className="btn btn-sm outline">
               <Ico name="users" size={13} /> Friends ledger
@@ -411,12 +415,12 @@ export function SplitQueueClient({
                   No txns match the current filter. Try widening the
                   range or clearing chips above.
                 </>
-              ) : includeReviewed ? (
+              ) : showAll ? (
                 <>
                   {filteredRows.length.toLocaleString()} txn
                   {filteredRows.length === 1 ? "" : "s"} match the
-                  filter, but they&rsquo;re all already split. Try
-                  another date range.
+                  filter, but none have a counterparty to split.
+                  Widen the range to find candidates.
                 </>
               ) : (
                 <>
@@ -427,7 +431,7 @@ export function SplitQueueClient({
                   <button
                     type="button"
                     className="btn btn-sm ghost"
-                    onClick={() => setIncludeReviewed(true)}
+                    onClick={() => setShowAll(true)}
                     style={{
                       display: "inline-flex",
                       padding: "2px 8px",
@@ -435,7 +439,7 @@ export function SplitQueueClient({
                       marginLeft: 4,
                     }}
                   >
-                    <Ico name="eye" size={11} /> Include reviewed
+                    <Ico name="eye" size={11} /> Show all
                   </button>
                 </>
               )}
@@ -641,7 +645,41 @@ function Row({
         </span>
       </div>
       <div style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-        {row.suggestedSplitWith ? (
+        {row.shareCount > 1 ? (
+          // Already-split row — show a calm muted badge stating the
+          // current split. Visually distinct from the accent
+          // "suggested split" pill so the user can tell at a glance
+          // which queue rows are decisions vs done.
+          <span
+            style={{
+              fontSize: 11.5,
+              color: "var(--muted)",
+              padding: "2px 8px",
+              border: "1px solid var(--border)",
+              borderRadius: 999,
+              background: "var(--surface-2)",
+            }}
+          >
+            split {row.shareCount}-way
+            {row.sharedWith.length > 0
+              ? ` with ${row.sharedWith.join(", ")}`
+              : ""}
+          </span>
+        ) : row.reviewed ? (
+          // Reviewed-as-personal — also done. Subtle "reviewed" tag.
+          <span
+            style={{
+              fontSize: 11.5,
+              color: "var(--muted-2)",
+              padding: "2px 8px",
+              border: "1px dashed var(--border)",
+              borderRadius: 999,
+              background: "transparent",
+            }}
+          >
+            reviewed · just me
+          </span>
+        ) : row.suggestedSplitWith ? (
           <span
             style={{
               fontSize: 11.5,
