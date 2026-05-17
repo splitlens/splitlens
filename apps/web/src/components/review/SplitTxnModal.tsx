@@ -60,6 +60,11 @@ export function SplitTxnModal({
   positionIdx,
   positionTotal,
   category,
+  categoryNav,
+  categoryNavIdx,
+  onPrevCategory,
+  onNextCategory,
+  onJumpToCategory,
 }: {
   row: SplitQueueRow;
   people: Array<{
@@ -83,6 +88,18 @@ export function SplitTxnModal({
     positionInCategory: number;
     totalInCategory: number;
   };
+  /** All categories present in the queue, in the order they appear.
+   *  Used to drive the [/] keyboard jumps and the click-name picker.
+   *  `firstIndex` is each category's first position in the flat queue
+   *  — that's where category-jump lands. */
+  categoryNav: Array<{ name: string; firstIndex: number; count: number }>;
+  /** Index of the active row's category within categoryNav. -1 means
+   *  the category isn't in the queue (shouldn't happen in practice).
+   *  Used to disable prev/next buttons at the ends. */
+  categoryNavIdx: number;
+  onPrevCategory: () => void;
+  onNextCategory: () => void;
+  onJumpToCategory: (name: string) => void;
 }) {
   // Local form state — initialized from the row's current values.
   // Recurrence lives in the categorization modal (InboxModal at
@@ -102,6 +119,15 @@ export function SplitTxnModal({
   // full ReviewTransactionDetail then. Cached per-row so re-opening
   // is instant.
   const [detailOpen, setDetailOpen] = useState(false);
+  // Category-picker popover state. Toggled by clicking the category
+  // name in the strip or pressing C. Always closed on mount so the
+  // initial frame is clean.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  // Close the picker whenever the row changes — otherwise it floats
+  // over the wrong category after [/]/arrow nav.
+  useEffect(() => {
+    setPickerOpen(false);
+  }, [row.id]);
   const [detail, setDetail] = useState<ReviewTransactionDetail | null>(null);
   const [recall, setRecall] = useState<MerchantRecallContext | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -236,7 +262,16 @@ export function SplitTxnModal({
     ],
   );
 
-  // Keyboard: ⏎ saves + advances, Esc closes, ←/→ navigates, S = just me.
+  // Keyboard map:
+  //   Enter       → save & advance
+  //   Esc         → close (or close picker first)
+  //   ←/→         → prev/next txn
+  //   /           → skip (same as →)
+  //   Space       → toggle detail pane
+  //   [ / ]       → prev/next category jump
+  //   C           → toggle category picker
+  //   S           → apply suggested split
+  //   J           → just me
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // Don't steal keys when the user is typing in an input.
@@ -247,13 +282,30 @@ export function SplitTxnModal({
         void save(true);
       } else if (e.key === "Escape") {
         e.preventDefault();
-        onClose();
+        // Esc collapses the picker first — keeps a single Esc from
+        // closing the whole modal when the user is mid-pick.
+        if (pickerOpen) setPickerOpen(false);
+        else onClose();
       } else if (e.key === "ArrowLeft") {
         e.preventDefault();
         onPrev();
       } else if (e.key === "ArrowRight" || e.key === "/") {
         e.preventDefault();
         onNext();
+      } else if (e.key === " " || e.code === "Space") {
+        // preventDefault stops Space from activating a focused
+        // button (e.g. "Just me") AND stops the page from scrolling.
+        e.preventDefault();
+        setDetailOpen((v) => !v);
+      } else if (e.key === "[") {
+        e.preventDefault();
+        onPrevCategory();
+      } else if (e.key === "]") {
+        e.preventDefault();
+        onNextCategory();
+      } else if (e.key === "c" || e.key === "C") {
+        e.preventDefault();
+        setPickerOpen((v) => !v);
       } else if (e.key === "s" || e.key === "S") {
         e.preventDefault();
         applySuggested();
@@ -264,7 +316,17 @@ export function SplitTxnModal({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [save, onClose, onPrev, onNext, applySuggested, setJustMe]);
+  }, [
+    save,
+    onClose,
+    onPrev,
+    onNext,
+    onPrevCategory,
+    onNextCategory,
+    applySuggested,
+    setJustMe,
+    pickerOpen,
+  ]);
 
   const sortedPeople = useMemo(
     () => [...people].sort((a, b) => b.txnCount - a.txnCount),
@@ -294,7 +356,14 @@ export function SplitTxnModal({
         }}
       >
         <motion.div
-          onClick={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            // Any click inside the modal shell (but outside the
+            // picker — its own handler stops propagation) closes the
+            // picker. Keeps the picker feeling like a transient
+            // popover rather than a modal-within-a-modal.
+            if (pickerOpen) setPickerOpen(false);
+          }}
           initial={{ opacity: 0, y: 16, scale: 0.98 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 8, scale: 0.98 }}
@@ -358,20 +427,25 @@ export function SplitTxnModal({
           </header>
 
           {/* Category strip — shows progress within the active
-              category. Pulses accent when the category changes
-              between rows so the user sees the transition. */}
+              category, lets the user jump between categories via
+              prev/next chevrons or the clickable name (opens a
+              picker dropdown). Pulses accent when the category
+              changes between rows so the user sees the transition.
+              `position: relative` so the picker popover anchors to
+              this strip. */}
           <div
             style={{
               padding: "10px 22px",
               borderBottom: "1px solid var(--border)",
               display: "flex",
               alignItems: "center",
-              gap: 10,
+              gap: 8,
               background: categoryChanged
                 ? "var(--accent-soft)"
                 : "var(--surface-2)",
               transition:
                 "background 600ms var(--ease-out-expo)",
+              position: "relative",
             }}
           >
             <Ico
@@ -379,15 +453,81 @@ export function SplitTxnModal({
               size={13}
               className={categoryChanged ? "accent" : "muted"}
             />
-            <span
+            {/* Prev category */}
+            <button
+              type="button"
+              onClick={onPrevCategory}
+              disabled={categoryNavIdx <= 0}
+              title="Previous category ([)"
+              aria-label="Previous category"
+              className="btn btn-sm ghost"
+              style={{
+                padding: "2px 5px",
+                opacity: categoryNavIdx <= 0 ? 0.35 : 1,
+              }}
+            >
+              <Ico name="chevron-left" size={11} />
+            </button>
+            {/* Clickable category name → opens picker */}
+            <button
+              type="button"
+              onClick={() => setPickerOpen((v) => !v)}
+              aria-expanded={pickerOpen}
+              aria-haspopup="listbox"
+              title="Jump to category (C)"
               className="eyebrow"
               style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                padding: "2px 8px",
+                background: pickerOpen
+                  ? "var(--surface)"
+                  : "transparent",
+                border: `1px solid ${
+                  pickerOpen ? "var(--border-strong)" : "transparent"
+                }`,
+                borderRadius: 6,
                 color: categoryChanged ? "var(--accent)" : "var(--muted)",
-                transition: "color 600ms var(--ease-out-expo)",
+                fontFamily: "inherit",
+                fontSize: 11,
+                letterSpacing: "0.05em",
+                cursor: "pointer",
+                transition:
+                  "color 600ms var(--ease-out-expo), background 140ms var(--ease-out), border-color 140ms var(--ease-out)",
               }}
             >
               {category.name}
-            </span>
+              <span
+                aria-hidden
+                style={{
+                  display: "inline-flex",
+                  transform: pickerOpen ? "rotate(180deg)" : "rotate(0deg)",
+                  transition: "transform 180ms var(--ease-out)",
+                }}
+              >
+                <Ico name="chevron-down" size={10} />
+              </span>
+            </button>
+            {/* Next category */}
+            <button
+              type="button"
+              onClick={onNextCategory}
+              disabled={categoryNavIdx < 0 || categoryNavIdx >= categoryNav.length - 1}
+              title="Next category (])"
+              aria-label="Next category"
+              className="btn btn-sm ghost"
+              style={{
+                padding: "2px 5px",
+                opacity:
+                  categoryNavIdx < 0 ||
+                  categoryNavIdx >= categoryNav.length - 1
+                    ? 0.35
+                    : 1,
+              }}
+            >
+              <Ico name="chevron-right" size={11} />
+            </button>
             <span
               className="mono tabular"
               style={{
@@ -425,6 +565,98 @@ export function SplitTxnModal({
                 }}
               />
             </div>
+
+            {/* Picker popover. Anchored to the strip, drops down over
+                the body. The body has overflow:hidden upstream but
+                the popover stays within the modal bounds so it
+                renders cleanly without portal logic. */}
+            <AnimatePresence>
+              {pickerOpen && (
+                <motion.div
+                  key="cat-picker"
+                  role="listbox"
+                  aria-label="Jump to category"
+                  initial={{ opacity: 0, y: -4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    position: "absolute",
+                    top: "calc(100% + 6px)",
+                    left: 40,
+                    zIndex: 5,
+                    minWidth: 280,
+                    maxWidth: 360,
+                    maxHeight: 320,
+                    overflowY: "auto",
+                    background: "var(--surface)",
+                    border: "1px solid var(--border-strong)",
+                    borderRadius: 10,
+                    boxShadow: "0 10px 40px rgba(0,0,0,0.45)",
+                    padding: 4,
+                  }}
+                >
+                  {categoryNav.length === 0 && (
+                    <div className="small muted" style={{ padding: 10 }}>
+                      No categories in this queue.
+                    </div>
+                  )}
+                  {categoryNav.map((c, i) => {
+                    const isActive = i === categoryNavIdx;
+                    return (
+                      <button
+                        key={c.name}
+                        type="button"
+                        role="option"
+                        aria-selected={isActive}
+                        onClick={() => {
+                          onJumpToCategory(c.name);
+                          setPickerOpen(false);
+                        }}
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "14px 1fr auto",
+                          gap: 10,
+                          alignItems: "center",
+                          width: "100%",
+                          padding: "8px 10px",
+                          background: isActive
+                            ? "var(--accent-soft)"
+                            : "transparent",
+                          border: "1px solid transparent",
+                          borderRadius: 6,
+                          color: isActive ? "var(--accent)" : "var(--fg)",
+                          fontFamily: "inherit",
+                          fontSize: 13,
+                          textAlign: "left",
+                          cursor: "pointer",
+                        }}
+                      >
+                        <span aria-hidden>
+                          {isActive && <Ico name="check" size={11} />}
+                        </span>
+                        <span
+                          style={{
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {c.name}
+                        </span>
+                        <span
+                          className="mono tabular tiny"
+                          style={{ color: "var(--muted-2)" }}
+                        >
+                          {c.count}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
 
           {/* Body — two-pane when detail is open. Left: existing form.
@@ -820,7 +1052,7 @@ export function SplitTxnModal({
             }}
           >
             <span className="tiny muted" style={{ flex: 1 }}>
-              <span className="kbd">↵</span> save · <span className="kbd">S</span> apply suggested · <span className="kbd">J</span> just me · <span className="kbd">/</span> skip · <span className="kbd">Esc</span> close
+              <span className="kbd">↵</span> save · <span className="kbd">S</span> suggest · <span className="kbd">J</span> just me · <span className="kbd">Space</span> detail · <span className="kbd">[</span>/<span className="kbd">]</span> cat · <span className="kbd">C</span> pick · <span className="kbd">Esc</span> close
             </span>
             <button
               type="button"

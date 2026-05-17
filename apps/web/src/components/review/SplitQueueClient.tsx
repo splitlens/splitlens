@@ -312,6 +312,56 @@ export function SplitQueueClient({
     else setActiveId(null);
   }, [activeId, flat]);
 
+  /**
+   * Category-jump nav. The flat queue is already sorted (category,
+   * date desc) per section, so we walk `flat` once and remember each
+   * category's first index — that's where `]` / category-picker
+   * jumps land. Categories are presented in queue order (i.e. the
+   * order the user encounters them while arrow-keying through),
+   * which means the picker matches the user's mental model of the
+   * sequence, not alphabetical sort.
+   */
+  const categoryNav = useMemo(() => {
+    const seen = new Map<string, { name: string; firstIndex: number; count: number }>();
+    flat.forEach((r, i) => {
+      const name = r.category ?? "Uncategorized";
+      const existing = seen.get(name);
+      if (existing) existing.count += 1;
+      else seen.set(name, { name, firstIndex: i, count: 1 });
+    });
+    return Array.from(seen.values()).sort(
+      (a, b) => a.firstIndex - b.firstIndex,
+    );
+  }, [flat]);
+
+  const goPrevCategory = useCallback(() => {
+    if (activeId == null) return;
+    const idx = flat.findIndex((r) => r.id === activeId);
+    if (idx < 0) return;
+    const currentCat = flat[idx]!.category ?? "Uncategorized";
+    const navIdx = categoryNav.findIndex((c) => c.name === currentCat);
+    const target = categoryNav[navIdx - 1];
+    if (target) setActiveId(flat[target.firstIndex]!.id);
+  }, [activeId, flat, categoryNav]);
+
+  const goNextCategory = useCallback(() => {
+    if (activeId == null) return;
+    const idx = flat.findIndex((r) => r.id === activeId);
+    if (idx < 0) return;
+    const currentCat = flat[idx]!.category ?? "Uncategorized";
+    const navIdx = categoryNav.findIndex((c) => c.name === currentCat);
+    const target = categoryNav[navIdx + 1];
+    if (target) setActiveId(flat[target.firstIndex]!.id);
+  }, [activeId, flat, categoryNav]);
+
+  const goToCategory = useCallback(
+    (name: string) => {
+      const target = categoryNav.find((c) => c.name === name);
+      if (target) setActiveId(flat[target.firstIndex]!.id);
+    },
+    [categoryNav, flat],
+  );
+
   const refresh = useCallback(() => {
     startTransition(() => router.refresh());
   }, [router, startTransition]);
@@ -607,6 +657,9 @@ export function SplitQueueClient({
         );
         const positionInCategory =
           sameCat.findIndex((r) => r.id === active.id) + 1;
+        const currentNavIdx = categoryNav.findIndex(
+          (c) => c.name === activeCat,
+        );
         return (
           <SplitTxnModal
             row={active}
@@ -625,6 +678,11 @@ export function SplitQueueClient({
               positionInCategory,
               totalInCategory: sameCat.length,
             }}
+            categoryNav={categoryNav}
+            categoryNavIdx={currentNavIdx}
+            onPrevCategory={goPrevCategory}
+            onNextCategory={goNextCategory}
+            onJumpToCategory={goToCategory}
           />
         );
       })()}
