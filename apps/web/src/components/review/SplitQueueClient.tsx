@@ -67,6 +67,12 @@ export function SplitQueueClient({
   // and sync back to the URL on a debounced effect.
   const [filter, setLocalFilter] = useState<ReviewListFilter>(initialFilter);
 
+  // Toggle: include rows the user already marked reviewed? Off by
+  // default so the queue surfaces just the un-reviewed candidates,
+  // matching the original "fresh inbox" intent. Flip on to retroactively
+  // split a row that was marked reviewed-as-personal earlier.
+  const [includeReviewed, setIncludeReviewed] = useState(false);
+
   const filteredRows = useMemo(
     () => applyClientFilter(allRows, filter),
     [allRows, filter],
@@ -96,7 +102,12 @@ export function SplitQueueClient({
     const recurringRows: SplitQueueRow[] = [];
     const largeRows: SplitQueueRow[] = [];
     for (const r of filteredRows) {
-      if (r.reviewed) continue;
+      // The reviewed filter is the toggleable one. Already-split rows
+      // (shareCount > 1) are always hidden — those are done; surfacing
+      // them in the "candidates" queue would be noise. To EDIT an
+      // existing split, the user goes to /review/category or /friends.
+      if (!includeReviewed && r.reviewed) continue;
+      if ((r.shareCount ?? 1) > 1) continue;
       if (!r.counterparty || r.counterparty === "") continue;
 
       const isPersonKind = r.counterpartyKind === "person";
@@ -154,7 +165,7 @@ export function SplitQueueClient({
     recurringRows.sort(sortDesc);
     largeRows.sort(sortDesc);
     return { personRows, recurringRows, largeRows };
-  }, [filteredRows, largeThreshold, peopleByPersonId]);
+  }, [filteredRows, largeThreshold, peopleByPersonId, includeReviewed]);
 
   const flat = useMemo(
     () => [...personRows, ...recurringRows, ...largeRows],
@@ -287,6 +298,32 @@ export function SplitQueueClient({
                 −{fmtInr(totalQueueOutflow)}
               </span>
             </div>
+            <button
+              type="button"
+              className="btn btn-sm outline"
+              onClick={() => setIncludeReviewed((v) => !v)}
+              aria-pressed={includeReviewed}
+              title={
+                includeReviewed
+                  ? "Currently showing reviewed-as-personal rows too"
+                  : "Also surface rows you marked reviewed-as-personal"
+              }
+              style={{
+                background: includeReviewed
+                  ? "var(--accent-soft)"
+                  : "transparent",
+                borderColor: includeReviewed
+                  ? "var(--accent-line)"
+                  : undefined,
+                color: includeReviewed ? "var(--accent)" : undefined,
+              }}
+            >
+              <Ico
+                name={includeReviewed ? "check" : "eye"}
+                size={13}
+              />
+              {includeReviewed ? "Reviewed included" : "Include reviewed"}
+            </button>
             <Link href="/friends" className="btn btn-sm outline">
               <Ico name="users" size={13} /> Friends ledger
             </Link>
@@ -374,13 +411,32 @@ export function SplitQueueClient({
                   No txns match the current filter. Try widening the
                   range or clearing chips above.
                 </>
+              ) : includeReviewed ? (
+                <>
+                  {filteredRows.length.toLocaleString()} txn
+                  {filteredRows.length === 1 ? "" : "s"} match the
+                  filter, but they&rsquo;re all already split. Try
+                  another date range.
+                </>
               ) : (
                 <>
                   {filteredRows.length.toLocaleString()} txn
                   {filteredRows.length === 1 ? "" : "s"} match the
                   filter, but they&rsquo;re all either already split
-                  or marked reviewed-as-personal. Open one from the
-                  category view if you want to retroactively split it.
+                  or marked reviewed-as-personal.{" "}
+                  <button
+                    type="button"
+                    className="btn btn-sm ghost"
+                    onClick={() => setIncludeReviewed(true)}
+                    style={{
+                      display: "inline-flex",
+                      padding: "2px 8px",
+                      fontSize: 11.5,
+                      marginLeft: 4,
+                    }}
+                  >
+                    <Ico name="eye" size={11} /> Include reviewed
+                  </button>
                 </>
               )}
             </div>
