@@ -1218,6 +1218,296 @@ export async function detectMerchantRecurrence(
 }
 
 // ----------------------------------------------------------------------------
+// Batch auto-classify — "fix everything I can with current rules + detection"
+// ----------------------------------------------------------------------------
+
+export interface BatchAutoClassifyPreview {
+  /** Un-reviewed rows that would get a category from a saved merchant rule. */
+  categoryFromRule: number;
+  /** Un-reviewed rows that would get a category from default-merchant rules
+   *  (none today — placeholder for the seed table feature). */
+  categoryFromDefault: number;
+  /** Un-reviewed rows whose counterparty has a detected cadence with no
+   *  recurrence set yet. We can fill in monthly/weekly/etc. */
+  recurrenceFromDetection: number;
+  /** Un-reviewed rows whose counterparty is a known person, not currently
+   *  split — we'd suggest splitting 2-way with that person. */
+  splitFromPersonKind: number;
+  /** Examples of merchants whose rules will fire — show in the preview. */
+  sampleMerchants: Array<{
+    counterparty: string;
+    txnCount: number;
+    will: string[];
+  }>;
+}
+
+/**
+ * Look at every un-reviewed transaction and report what an auto-classify
+ * pass would change. Does NOT mutate the DB — purely a preview, so the
+ * user can decide to apply or back out.
+ *
+ * The preview gates on the rules we've stored AND the detection signals
+ * we can compute live:
+ *   1. Saved merchant rules (category / recurrence / share).
+ *   2. Detected recurrence — for merchants without a recurrence rule
+ *      where we can confidently detect one.
+ *   3. Person-kind split — for un-split person txns where person_id
+ *      resolves to a known display name.
+ */
+export async function previewBatchAutoClassify(): Promise<BatchAutoClassifyPreview> {
+  const db = openDb();
+
+  // 1. Un-reviewed rows that a saved category rule would fix.
+  const catFromRule = db.get<{ n: number }>(sql`
+    SELECT count(*) AS n FROM transactions t
+    WHERE t.reviewed = 0
+      AND t.counterparty IN (SELECT counterparty FROM merchant_category_rules)
+      AND (
+        t.category IS NULL
+        OR t.category != (
+          SELECT category FROM merchant_category_rules r
+          WHERE r.counterparty = t.counterparty
+        )
+      )
+  `);
+
+  // 2. Un-reviewed person-kind rows not already split. Each is a
+  //    candidate for the "split 2-way with that person" suggestion.
+  const splitCands = db.get<{ n: number }>(sql`
+    SELECT count(*) AS n FROM transactions t
+    WHERE t.reviewed = 0
+      AND t.counterparty_kind = 'person'
+      AND t.person_id IS NOT NULL
+      AND (t.share_count IS NULL OR t.share_count = 1)
+      AND (t.shared_with IS NULL OR t.shared_with = '' OR t.shared_with = '[]')
+  `);
+
+  // 3. Recurrence detection — count of un-reviewed merchants that have
+  //    no current recurrence + at least 3 history rows. We sample a few
+  //    to estimate yield (full detection on every merchant would be
+  //    expensive; the apply step does the precise work).
+  const recCandsRow = db.get<{ n: number }>(sql`
+    SELECT COUNT(*) AS n FROM (
+      SELECT t.counterparty
+      FROM transactions t
+      WHERE t.reviewed = 0
+        AND t.counterparty IS NOT NULL
+        AND (t.recurrence IS NULL OR t.recurrence = 'one_time')
+        AND t.counterparty NOT IN (SELECT counterparty FROM merchant_recurrence_rules)
+      GROUP BY t.counterparty
+      HAVING (
+        SELECT count(*) FROM transactions t2
+        WHERE t2.counterparty = t.counterparty
+      ) >= 3
+    )
+  `);
+  // Do precise per-merchant detection only for the candidates count
+  // (this is the user's confirmation surface — be exact, not estimated).
+  const recCands = db.all<{ counterparty: string }>(sql`
+    SELECT DISTINCT t.counterparty
+    FROM transactions t
+    WHERE t.reviewed = 0
+      AND t.counterparty IS NOT NULL
+      AND (t.recurrence IS NULL OR t.recurrence = 'one_time')
+      AND t.counterparty NOT IN (SELECT counterparty FROM merchant_recurrence_rules)
+  `);
+  let recDetected = 0;
+  for (const r of recCands) {
+    const det = await detectMerchantRecurrence(r.counterparty);
+    if (det && det !== "one_time") {
+      // Count rows that'd be touched for this merchant.
+      const n = db.get<{ n: number }>(sql`
+        SELECT count(*) AS n FROM transactions
+        WHERE counterparty = ${r.counterparty}
+          AND reviewed = 0
+          AND (recurrence IS NULL OR recurrence = 'one_time')
+      `);
+      recDetected += n?.n ?? 0;
+    }
+  }
+
+  // Sample merchants for the preview (showing the user concrete
+  // examples is more persuasive than a raw count). Pick the top 5
+  // merchants by un-reviewed row count.
+  const sample = db.all<{
+    counterparty: string;
+    txn_count: number;
+  }>(sql`
+    SELECT counterparty, count(*) AS txn_count
+    FROM transactions
+    WHERE reviewed = 0 AND counterparty IS NOT NULL
+    GROUP BY counterparty
+    ORDER BY txn_count DESC
+    LIMIT 5
+  `);
+  const sampleMerchants: BatchAutoClassifyPreview["sampleMerchants"] = [];
+  for (const s of sample) {
+    const will: string[] = [];
+    const catRule = db.get<{ category: string }>(sql`
+      SELECT category FROM merchant_category_rules WHERE counterparty = ${s.counterparty}
+    `);
+    if (catRule) will.push(`→ ${catRule.category}`);
+    const recRule = db.get<{ recurrence: string }>(sql`
+      SELECT recurrence FROM merchant_recurrence_rules WHERE counterparty = ${s.counterparty}
+    `);
+    if (recRule) will.push(`· ${recRule.recurrence}`);
+    if (will.length === 0) {
+      // No saved rule — see if detection fires.
+      const det = await detectMerchantRecurrence(s.counterparty);
+      if (det) will.push(`· detected ${det}`);
+    }
+    if (will.length > 0) {
+      sampleMerchants.push({
+        counterparty: s.counterparty,
+        txnCount: Number(s.txn_count),
+        will,
+      });
+    }
+  }
+
+  return {
+    categoryFromRule: catFromRule?.n ?? 0,
+    categoryFromDefault: 0,
+    recurrenceFromDetection: recDetected,
+    splitFromPersonKind: splitCands?.n ?? 0,
+    sampleMerchants,
+  };
+}
+
+/**
+ * Apply the auto-classify pass for real. Mirrors the preview but
+ * writes the changes. Returns the total rows touched for the toast.
+ *
+ * Implementation: run the sweep for saved rules first (cheapest), then
+ * walk un-rule'd merchants and apply detected recurrence one at a
+ * time (these get persisted as rules so the next sweep is fast), then
+ * the person-kind split fix.
+ */
+export async function applyBatchAutoClassify(): Promise<{
+  ok: true;
+  applied: number;
+}> {
+  const db = openDb();
+  let applied = 0;
+
+  // 1. Rules sweep — category + recurrence + share. Same logic as the
+  //    /review page-load sweep, only we count rows ourselves here so
+  //    the response carries an "applied" total for the toast.
+  const ruleSweeps = [
+    sql`
+      UPDATE transactions
+      SET category = (
+            SELECT category FROM merchant_category_rules r
+            WHERE r.counterparty = transactions.counterparty
+          ),
+          category_rule = 'merchant',
+          updated_at = CURRENT_TIMESTAMP
+      WHERE transactions.counterparty IN (SELECT counterparty FROM merchant_category_rules)
+        AND transactions.reviewed = 0
+        AND (
+          transactions.category IS NULL
+          OR transactions.category != (
+            SELECT category FROM merchant_category_rules r
+            WHERE r.counterparty = transactions.counterparty
+          )
+        )
+    `,
+    sql`
+      UPDATE transactions
+      SET recurrence = (
+            SELECT recurrence FROM merchant_recurrence_rules r
+            WHERE r.counterparty = transactions.counterparty
+          ),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE transactions.counterparty IN (SELECT counterparty FROM merchant_recurrence_rules)
+        AND transactions.reviewed = 0
+        AND (
+          transactions.recurrence IS NULL
+          OR transactions.recurrence != (
+            SELECT recurrence FROM merchant_recurrence_rules r
+            WHERE r.counterparty = transactions.counterparty
+          )
+        )
+    `,
+    sql`
+      UPDATE transactions
+      SET shared_with = (
+            SELECT shared_with FROM merchant_share_rules r
+            WHERE r.counterparty = transactions.counterparty
+          ),
+          share_count = (
+            SELECT share_count FROM merchant_share_rules r
+            WHERE r.counterparty = transactions.counterparty
+          ),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE transactions.counterparty IN (SELECT counterparty FROM merchant_share_rules)
+        AND transactions.reviewed = 0
+    `,
+  ];
+  for (const q of ruleSweeps) {
+    const r = db.run(q);
+    if (typeof (r as { changes?: number }).changes === "number") {
+      applied += (r as { changes: number }).changes;
+    }
+  }
+
+  // 2. Detected recurrence — for merchants without a stored rule.
+  //    Each detection becomes a stored rule so it sweeps on future
+  //    page loads + ingestions for free.
+  const recCands = db.all<{ counterparty: string }>(sql`
+    SELECT DISTINCT t.counterparty
+    FROM transactions t
+    WHERE t.reviewed = 0
+      AND t.counterparty IS NOT NULL
+      AND (t.recurrence IS NULL OR t.recurrence = 'one_time')
+      AND t.counterparty NOT IN (SELECT counterparty FROM merchant_recurrence_rules)
+  `);
+  for (const r of recCands) {
+    const det = await detectMerchantRecurrence(r.counterparty);
+    if (det && det !== "one_time") {
+      const res = await applyMerchantRule(r.counterparty, { recurrence: det });
+      if (res.ok) applied += res.rowsUpdated;
+    }
+  }
+
+  // 3. Person-kind split — set sharedWith to the display name of the
+  //    associated person, share_count = 2. We look up display names
+  //    via the people registry (DEFAULT_PEOPLE; same source as the
+  //    rest of the app).
+  const personRows = db.all<{
+    id: number;
+    person_id: string;
+  }>(sql`
+    SELECT id, person_id
+    FROM transactions
+    WHERE reviewed = 0
+      AND counterparty_kind = 'person'
+      AND person_id IS NOT NULL
+      AND (share_count IS NULL OR share_count = 1)
+      AND (shared_with IS NULL OR shared_with = '' OR shared_with = '[]')
+  `);
+  const personIdToName = new Map(
+    DEFAULT_PEOPLE.map((p) => [p.id, p.displayName]),
+  );
+  for (const row of personRows) {
+    const name = personIdToName.get(row.person_id);
+    if (!name) continue;
+    db.run(sql`
+      UPDATE transactions
+      SET shared_with = ${JSON.stringify([name])},
+          share_count = 2,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ${row.id}
+    `);
+    applied += 1;
+  }
+
+  revalidatePath("/review");
+  revalidatePath("/dashboard");
+  return { ok: true, applied };
+}
+
+// ----------------------------------------------------------------------------
 // Three-dimensional per-merchant rules (category + recurrence + share)
 // ----------------------------------------------------------------------------
 

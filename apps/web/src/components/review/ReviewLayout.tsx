@@ -46,7 +46,12 @@ import { Ico } from "@/components/Ico";
 
 import { InboxModal } from "./InboxModal";
 import { useReviewKeyboard } from "./useReviewKeyboard";
-import { updateTransaction } from "@/app/review/actions";
+import {
+  updateTransaction,
+  previewBatchAutoClassify,
+  applyBatchAutoClassify,
+  type BatchAutoClassifyPreview,
+} from "@/app/review/actions";
 
 const MONTH_SHORT = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -307,6 +312,10 @@ export function ReviewLayout(props: ReviewLayoutProps) {
   // Multi-row selection — client-only for now; bulk actions in the bar are
   // wired to the visible state but the persistence/action layer is a TODO.
   const [selected, setSelected] = useState<Set<number>>(new Set());
+
+  // Auto-classify modal state. Opens via the header button, fetches a
+  // preview on first open, then applies on user confirmation.
+  const [autoClassifyOpen, setAutoClassifyOpen] = useState(false);
   useEffect(() => {
     // Reset selection whenever the filter changes (list contents differ).
     setSelected(new Set());
@@ -382,6 +391,20 @@ export function ReviewLayout(props: ReviewLayoutProps) {
               <Ico name="inbox" size={13} />
               {filter.unreviewedOnly ? "Showing unreviewed" : "All txns"}
               <span className="kbd">U</span>
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm outline"
+              onClick={() => setAutoClassifyOpen(true)}
+              title="Apply all known rules + detected patterns to un-reviewed txns"
+              style={{
+                background: "var(--accent-soft)",
+                borderColor: "var(--accent-line)",
+                color: "var(--accent)",
+              }}
+            >
+              <Ico name="sparkles" size={13} />
+              Auto-classify
             </button>
             <button type="button" className="btn btn-sm ghost" title="Saved views (coming soon)">
               <Ico name="filter" size={13} /> Saved views <span className="kbd">G</span>
@@ -527,6 +550,16 @@ export function ReviewLayout(props: ReviewLayoutProps) {
             : null
         }
       />
+
+      {autoClassifyOpen && (
+        <AutoClassifyModal
+          onClose={() => setAutoClassifyOpen(false)}
+          onApplied={() => {
+            setAutoClassifyOpen(false);
+            refresh();
+          }}
+        />
+      )}
     </main>
   );
 }
@@ -2337,6 +2370,268 @@ function SelectionBar({
       <div className="flex items-center gap-2 small muted">
         <span>Bulk actions land in the inbox modal · open one to apply across selection</span>
       </div>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// AutoClassifyModal — preview + apply for the batch sweeper
+// ────────────────────────────────────────────────────────────────────────────
+
+function AutoClassifyModal({
+  onClose,
+  onApplied,
+}: {
+  onClose: () => void;
+  onApplied: () => void;
+}) {
+  const [preview, setPreview] = useState<BatchAutoClassifyPreview | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [applying, setApplying] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    previewBatchAutoClassify()
+      .then((p) => {
+        if (!cancelled) {
+          setPreview(p);
+          setLoading(false);
+        }
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) {
+          setErr(e instanceof Error ? e.message : String(e));
+          setLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const totalRows = preview
+    ? preview.categoryFromRule +
+      preview.recurrenceFromDetection +
+      preview.splitFromPersonKind
+    : 0;
+
+  const apply = async () => {
+    setApplying(true);
+    setErr(null);
+    const r = await applyBatchAutoClassify();
+    setApplying(false);
+    if (r.ok) onApplied();
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+      className="modal-backdrop-anim"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 60,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 24,
+        background: "color-mix(in srgb, var(--bg) 70%, transparent)",
+        backdropFilter: "blur(4px)",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="surface modal-panel-anim"
+        style={{
+          width: "100%",
+          maxWidth: 560,
+          maxHeight: "85vh",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          boxShadow: "0 22px 70px rgba(0,0,0,0.5)",
+        }}
+      >
+        <header
+          style={{
+            padding: "16px 22px",
+            borderBottom: "1px solid var(--border)",
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+          }}
+        >
+          <Ico name="sparkles" size={16} className="accent" />
+          <div style={{ flex: 1 }}>
+            <span className="eyebrow eyebrow-accent">Auto-classify</span>
+            <h3 className="h2" style={{ marginTop: 2 }}>
+              Apply known rules + detected patterns
+            </h3>
+          </div>
+          <button
+            type="button"
+            className="btn btn-sm ghost"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            <Ico name="x" size={16} />
+          </button>
+        </header>
+
+        <div style={{ padding: "16px 22px", overflowY: "auto", flex: 1 }}>
+          {loading && (
+            <div className="muted small">Scanning un-reviewed txns…</div>
+          )}
+          {err && (
+            <div
+              className="small"
+              style={{ color: "var(--warn)" }}
+            >
+              {err}
+            </div>
+          )}
+          {preview && !loading && (
+            <>
+              <div className="flex flex-col gap-2" style={{ marginBottom: 14 }}>
+                <RowStat
+                  label="From saved category rules"
+                  count={preview.categoryFromRule}
+                />
+                <RowStat
+                  label="From detected recurrence patterns"
+                  count={preview.recurrenceFromDetection}
+                />
+                <RowStat
+                  label="Split with friends (person-kind txns)"
+                  count={preview.splitFromPersonKind}
+                />
+              </div>
+
+              {preview.sampleMerchants.length > 0 && (
+                <div>
+                  <div className="eyebrow" style={{ marginBottom: 8 }}>
+                    Sample merchants affected
+                  </div>
+                  <div className="flex flex-col" style={{ gap: 6 }}>
+                    {preview.sampleMerchants.map((m) => (
+                      <div
+                        key={m.counterparty}
+                        className="flex items-baseline justify-between"
+                        style={{
+                          padding: "8px 10px",
+                          background: "var(--surface-2)",
+                          borderRadius: 6,
+                          gap: 10,
+                        }}
+                      >
+                        <span style={{ fontSize: 13, color: "var(--fg)" }}>
+                          {m.counterparty}
+                        </span>
+                        <span
+                          className="tiny mono"
+                          style={{
+                            color: "var(--muted)",
+                            fontVariantNumeric: "tabular-nums",
+                            marginLeft: "auto",
+                          }}
+                        >
+                          {m.txnCount} {m.txnCount === 1 ? "txn" : "txns"}
+                        </span>
+                        <span className="tiny" style={{ color: "var(--accent)" }}>
+                          {m.will.join(" ")}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {totalRows === 0 && (
+                <div
+                  className="small muted"
+                  style={{
+                    textAlign: "center",
+                    padding: "20px 0",
+                  }}
+                >
+                  Nothing to auto-classify right now. Set merchant rules
+                  while reviewing individual txns and they&rsquo;ll show
+                  up here on the next ingest.
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <footer
+          style={{
+            padding: "12px 22px",
+            borderTop: "1px solid var(--border)",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <span className="small muted" style={{ flex: 1 }}>
+            {totalRows > 0 && (
+              <>
+                <b style={{ color: "var(--fg)", fontWeight: 500 }}>
+                  {totalRows.toLocaleString()}
+                </b>{" "}
+                row{totalRows === 1 ? "" : "s"} will be updated · reviewed
+                txns are untouched
+              </>
+            )}
+          </span>
+          <button
+            type="button"
+            className="btn btn-sm ghost"
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm primary"
+            disabled={applying || loading || totalRows === 0}
+            onClick={apply}
+          >
+            {applying ? "Applying…" : `Apply${totalRows ? ` ${totalRows.toLocaleString()}` : ""}`}
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+function RowStat({ label, count }: { label: string; count: number }) {
+  return (
+    <div
+      className="flex items-baseline justify-between"
+      style={{
+        padding: "8px 12px",
+        background: count > 0 ? "var(--accent-soft)" : "var(--surface-2)",
+        border: `1px solid ${
+          count > 0 ? "var(--accent-line)" : "var(--border)"
+        }`,
+        borderRadius: 7,
+      }}
+    >
+      <span style={{ fontSize: 13, color: "var(--fg)" }}>{label}</span>
+      <span
+        className="mono"
+        style={{
+          fontSize: 14,
+          fontVariantNumeric: "tabular-nums",
+          color: count > 0 ? "var(--accent)" : "var(--muted-2)",
+        }}
+      >
+        {count.toLocaleString()}
+      </span>
     </div>
   );
 }
