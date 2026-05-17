@@ -3,10 +3,17 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const LINKS: { href: "/" | "/try" | "/dashboard"; label: string; emoji: string }[] = [
+const LINKS: {
+  href: "/" | "/try" | "/dashboard" | "/friends" | "/reports" | "/review";
+  label: string;
+  emoji: string;
+}[] = [
   { href: "/", label: "Home", emoji: "🏠" },
-  { href: "/try", label: "Upload", emoji: "📄" },
   { href: "/dashboard", label: "Dashboard", emoji: "📊" },
+  { href: "/review", label: "Review", emoji: "✏️" },
+  { href: "/reports", label: "Monthly review", emoji: "📝" },
+  { href: "/friends", label: "Friends", emoji: "👥" },
+  { href: "/try", label: "Upload", emoji: "📄" },
 ];
 
 export function TopNav() {

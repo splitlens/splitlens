@@ -1,157 +1,29 @@
 /**
- * Repository layer: typed queries against the local PGlite DB.
+ * Server-side query layer over the canonical SQLite database.
  *
- * NOTE on the implementation: we use raw SQL via `db.execute(sql\`...\`)` rather
- * than Drizzle's chainable query builder. The chainable builder ties query
- * objects to a specific drizzle-orm virtual instance; pnpm resolves the same
- * version of drizzle-orm twice (once in @splitlens/db without PGlite peer,
- * once in apps/web with it) which causes type incompatibility despite identical
- * runtime behavior. Raw SQL sidesteps that — we lose builder type-safety in
- * exchange for shipping. Schema in @splitlens/db is still the source of truth.
+ * Runs in the Next.js Node runtime (Server Components / Route Handlers). The
+ * web app is a read-only viewer over data the daemon has already ingested
+ * into ~/Library/Application Support/splitlens/splitlens.sqlite. No browser
+ * IndexedDB, no PGlite anymore.
+ *
+ * Every export here is a Drizzle query that runs server-side. Components
+ * `await` them and receive plain JSON-serializable results.
  */
-"use client";
-
+import "server-only";
 import { sql } from "drizzle-orm";
-import type {
-  ParsedStatement,
-  RawTransaction,
-  CcStatement,
-  CcRawTransaction,
-} from "@splitlens/core";
-import { categorize, DEFAULT_RULES, identifyPerson, DEFAULT_PEOPLE } from "@splitlens/core";
-import { getDb } from "./db";
+import { openDb, type SplitLensDb } from "@splitlens/db";
+import { DEFAULT_PEOPLE } from "@splitlens/core";
 
-export interface SaveResult {
-  accountId: number;
-  statementId: number;
-  /** Inserted as new rows. */
-  inserted: number;
-  /** Skipped because the same statement was re-uploaded (idempotent re-import). */
-  skippedSameStatement: number;
-  /** Skipped because the transaction already exists from a DIFFERENT statement
-   * (cross-statement dedup, e.g., monthly statement vs full-year statement
-   * covering the same period). This is the smart dedup the user asked for. */
-  skippedDuplicate: number;
-  /** Total skipped (sum of the two). */
-  skipped: number;
+// Open the SQLite handle lazily on first query — cheap (~1ms) so we can do
+// it per-request and let process exit close the file naturally. Avoids the
+// dev-mode "module-singleton leaks between HMR reloads" trap.
+function db(): SplitLensDb {
+  return openDb();
 }
 
-/**
- * Compute a deterministic identity for a transaction so we can dedupe across
- * statements (e.g., a monthly statement + a year-long statement that overlap).
- *
- * Identity = bank's ref_no when available (UPI/NEFT references are globally
- * unique). Otherwise fall back to (date, amount-sign, amount, narration prefix).
- */
-function computeContentHash(t: {
-  txnDate: string;
-  refNo?: string | null;
-  withdrawal: number | null;
-  deposit: number | null;
-  narration: string;
-}): string {
-  // Strong signal: bank-provided ref number (UPI/NEFT). Strip leading zeros.
-  const ref = (t.refNo ?? "").replace(/^0+/, "").trim();
-  if (ref.length >= 6) {
-    // ref_no alone is enough for HDFC; pair with date as belt-and-suspenders.
-    return `r:${t.txnDate}:${ref}`;
-  }
-  // Fallback: date + signed amount + first 50 chars of narration (collapsed whitespace)
-  const amount =
-    t.withdrawal != null ? `-${t.withdrawal}` : t.deposit != null ? `+${t.deposit}` : "0";
-  const narr = t.narration.replace(/\s+/g, " ").trim().slice(0, 50);
-  return `f:${t.txnDate}:${amount}:${narr}`;
-}
-
-// ---- Write paths ----
-
-export async function saveSavingsResult(
-  fileName: string,
-  stmt: ParsedStatement,
-  txns: RawTransaction[],
-): Promise<SaveResult> {
-  const accountId = await upsertAccount({
-    bank: stmt.bank,
-    type: "savings",
-    last4: stmt.accountLast4,
-    customerName: stmt.customerName ?? null,
-  });
-  const statementId = await upsertStatement({
-    accountId,
-    sourceFile: fileName,
-    periodFrom: stmt.periodFrom ?? null,
-    periodTo: stmt.periodTo ?? null,
-    txnCount: txns.length,
-  });
-
-  const result = await bulkInsertTxns(
-    accountId,
-    statementId,
-    txns.map((t) => ({
-      txnDate: t.txnDate,
-      valueDate: t.valueDate ?? null,
-      narration: t.narration,
-      refNo: t.refNo ?? null,
-      withdrawal: t.withdrawal,
-      deposit: t.deposit,
-      closingBalance: t.closingBalance ?? null,
-      sourceRowIdx: t.sourceRowIdx,
-    })),
-  );
-  return {
-    accountId,
-    statementId,
-    inserted: result.inserted,
-    skippedSameStatement: result.skippedSameStatement,
-    skippedDuplicate: result.skippedDuplicate,
-    skipped: result.skippedSameStatement + result.skippedDuplicate,
-  };
-}
-
-export async function saveCcResult(
-  fileName: string,
-  stmt: CcStatement,
-  txns: CcRawTransaction[],
-): Promise<SaveResult> {
-  const accountId = await upsertAccount({
-    bank: stmt.bank,
-    type: "credit_card",
-    last4: stmt.cardLast4,
-    customerName: stmt.customerName ?? null,
-  });
-  const statementId = await upsertStatement({
-    accountId,
-    sourceFile: fileName,
-    periodFrom: stmt.periodFrom ?? null,
-    periodTo: stmt.periodTo ?? null,
-    txnCount: txns.length,
-  });
-
-  const result = await bulkInsertTxns(
-    accountId,
-    statementId,
-    txns.map((t) => ({
-      txnDate: t.txnDate,
-      valueDate: null,
-      narration: t.foreignAmount ? `${t.description} (${t.foreignAmount})` : t.description,
-      refNo: null,
-      withdrawal: t.isPayment ? null : t.amount,
-      deposit: t.isPayment ? t.amount : null,
-      closingBalance: null,
-      sourceRowIdx: t.sourceRowIdx,
-    })),
-  );
-  return {
-    accountId,
-    statementId,
-    inserted: result.inserted,
-    skippedSameStatement: result.skippedSameStatement,
-    skippedDuplicate: result.skippedDuplicate,
-    skipped: result.skippedSameStatement + result.skippedDuplicate,
-  };
-}
-
-// ---- Read queries ----
+// ============================================================================
+// Tile-strip stats at the top of the dashboard
+// ============================================================================
 
 export interface DashboardSummary {
   accountCount: number;
@@ -159,33 +31,57 @@ export interface DashboardSummary {
   txnCount: number;
   totalOut: number;
   totalIn: number;
+  net: number;
+  /** Rows that have a wall-clock `txn_time` (i.e. enriched by PhonePe/CC). */
+  txnsWithTime: number;
+  /** Date of the earliest transaction we have on record. */
+  earliestTxnDate: string | null;
+  latestTxnDate: string | null;
+  autopayPairs: number;
 }
 
 export async function getDashboardSummary(): Promise<DashboardSummary> {
-  const db = await getDb();
-  const result = await db.execute<{
-    account_count: number;
-    statement_count: number;
-    txn_count: number;
-    total_out: number;
-    total_in: number;
-  }>(sql`
-    SELECT
-      (SELECT COUNT(*)::int FROM accounts)              AS account_count,
-      (SELECT COUNT(*)::int FROM statements)            AS statement_count,
-      (SELECT COUNT(*)::int FROM transactions)          AS txn_count,
-      COALESCE((SELECT SUM(withdrawal) FROM transactions), 0)::real AS total_out,
-      COALESCE((SELECT SUM(deposit)    FROM transactions), 0)::real AS total_in
-  `);
-  const row = result.rows?.[0];
+  const rows = db()
+    .all<{
+      account_count: number;
+      statement_count: number;
+      txn_count: number;
+      total_out: number | null;
+      total_in: number | null;
+      txns_with_time: number;
+      earliest: string | null;
+      latest: string | null;
+      autopay_rows: number;
+    }>(sql`
+      SELECT
+        (SELECT count(*) FROM accounts)                                 AS account_count,
+        (SELECT count(*) FROM statements)                               AS statement_count,
+        (SELECT count(*) FROM transactions)                             AS txn_count,
+        (SELECT coalesce(sum(withdrawal), 0) FROM transactions)         AS total_out,
+        (SELECT coalesce(sum(deposit), 0) FROM transactions)            AS total_in,
+        (SELECT count(*) FROM transactions WHERE txn_time IS NOT NULL)  AS txns_with_time,
+        (SELECT min(txn_date) FROM transactions)                        AS earliest,
+        (SELECT max(txn_date) FROM transactions)                        AS latest,
+        (SELECT count(*) FROM transactions WHERE linked_txn_id IS NOT NULL) AS autopay_rows
+    `);
+  const r = rows[0]!;
   return {
-    accountCount: row?.account_count ?? 0,
-    statementCount: row?.statement_count ?? 0,
-    txnCount: row?.txn_count ?? 0,
-    totalOut: Number(row?.total_out ?? 0),
-    totalIn: Number(row?.total_in ?? 0),
+    accountCount: r.account_count,
+    statementCount: r.statement_count,
+    txnCount: r.txn_count,
+    totalOut: Number(r.total_out ?? 0),
+    totalIn: Number(r.total_in ?? 0),
+    net: Number(r.total_in ?? 0) - Number(r.total_out ?? 0),
+    txnsWithTime: r.txns_with_time,
+    earliestTxnDate: r.earliest,
+    latestTxnDate: r.latest,
+    autopayPairs: Math.floor(r.autopay_rows / 2),
   };
 }
+
+// ============================================================================
+// Per-account roll-ups
+// ============================================================================
 
 export interface AccountSummary {
   id: number;
@@ -196,402 +92,1240 @@ export interface AccountSummary {
   txnCount: number;
   totalOut: number;
   totalIn: number;
+  net: number;
 }
 
 export async function getAccountsWithSummary(): Promise<AccountSummary[]> {
-  const db = await getDb();
-  const result = await db.execute<{
+  const rows = db().all<{
     id: number;
     bank: string;
     type: string;
     last4: string;
     customer_name: string | null;
     txn_count: number;
-    total_out: number;
-    total_in: number;
+    total_out: number | null;
+    total_in: number | null;
   }>(sql`
     SELECT
       a.id, a.bank, a.type, a.last4, a.customer_name,
-      COUNT(t.id)::int                       AS txn_count,
-      COALESCE(SUM(t.withdrawal), 0)::real   AS total_out,
-      COALESCE(SUM(t.deposit), 0)::real      AS total_in
+      count(t.id)                              AS txn_count,
+      coalesce(sum(t.withdrawal), 0)           AS total_out,
+      coalesce(sum(t.deposit), 0)              AS total_in
     FROM accounts a
     LEFT JOIN transactions t ON t.account_id = a.id
     GROUP BY a.id
-    ORDER BY a.bank, a.type, a.last4
+    ORDER BY a.type, a.last4
   `);
-  return (result.rows ?? []).map((r) => ({
+  return rows.map((r) => ({
     id: r.id,
     bank: r.bank,
     type: r.type,
     last4: r.last4,
     customerName: r.customer_name,
     txnCount: r.txn_count,
-    totalOut: Number(r.total_out),
-    totalIn: Number(r.total_in),
+    totalOut: Number(r.total_out ?? 0),
+    totalIn: Number(r.total_in ?? 0),
+    net: Number(r.total_in ?? 0) - Number(r.total_out ?? 0),
   }));
 }
 
-export interface CategorySummary {
-  category: string;
-  /** Top-level group ("Bills", "Food", etc.) — derived from "Group:Sub" by splitting on first ':'. */
-  group: string;
-  txnCount: number;
-  totalOut: number;
-  totalIn: number;
-}
-
-/**
- * Per-category aggregation. Excludes Investment + Transfer groups by default
- * because they're not "real" spend (moving money between your own accounts /
- * to investment vehicles).
- */
-export async function getSpendByCategory(
-  opts: { excludeNonSpend?: boolean } = {},
-): Promise<CategorySummary[]> {
-  const db = await getDb();
-  const excludeFilter = opts.excludeNonSpend
-    ? sql`AND COALESCE(category, 'Uncategorized') NOT LIKE 'Investment:%' AND COALESCE(category, 'Uncategorized') NOT LIKE 'Transfer:%'`
-    : sql``;
-  const result = await db.execute<{
-    category: string;
-    txn_count: number;
-    total_out: number;
-    total_in: number;
-  }>(sql`
-    SELECT
-      COALESCE(category, 'Uncategorized') AS category,
-      COUNT(*)::int                           AS txn_count,
-      COALESCE(SUM(withdrawal), 0)::real      AS total_out,
-      COALESCE(SUM(deposit), 0)::real         AS total_in
-    FROM transactions
-    WHERE 1=1 ${excludeFilter}
-    GROUP BY COALESCE(category, 'Uncategorized')
-    ORDER BY total_out DESC, total_in DESC
-  `);
-  return (result.rows ?? []).map((r) => ({
-    category: r.category,
-    group: (r.category.split(":")[0] ?? r.category) as string,
-    txnCount: r.txn_count,
-    totalOut: Number(r.total_out),
-    totalIn: Number(r.total_in),
-  }));
-}
+// ============================================================================
+// Top-of-mind people
+// ============================================================================
 
 export interface PeopleSummary {
   personId: string;
   displayName: string;
   relationship: string;
   txnCount: number;
-  /** Money YOU sent to this person. */
   totalSent: number;
-  /** Money received from this person. */
   totalReceived: number;
-  /** Net = totalSent - totalReceived. Positive = they owe you, negative = you owe them. */
+  /** Positive = you've sent net to them; negative = they've sent to you. */
   net: number;
-  /** Most recent txn date (ISO). */
   lastTxnDate: string | null;
 }
 
-/**
- * Per-person aggregation. Joins the persisted person_id back to the in-code
- * registry to enrich with displayName + relationship (denormalized lookup,
- * cheap because the registry is small).
- */
 export async function getPeopleSummary(): Promise<PeopleSummary[]> {
-  const db = await getDb();
-  const result = await db.execute<{
+  const rows = db().all<{
     person_id: string;
     txn_count: number;
-    total_sent: number;
-    total_received: number;
-    last_txn_date: string;
+    total_sent: number | null;
+    total_received: number | null;
+    last_txn_date: string | null;
   }>(sql`
     SELECT
       person_id,
-      COUNT(*)::int                          AS txn_count,
-      COALESCE(SUM(withdrawal), 0)::real     AS total_sent,
-      COALESCE(SUM(deposit), 0)::real        AS total_received,
-      MAX(txn_date)                          AS last_txn_date
+      count(*)                                AS txn_count,
+      coalesce(sum(withdrawal), 0)            AS total_sent,
+      coalesce(sum(deposit), 0)               AS total_received,
+      max(txn_date)                           AS last_txn_date
     FROM transactions
     WHERE person_id IS NOT NULL
     GROUP BY person_id
-    ORDER BY (COALESCE(SUM(withdrawal), 0) + COALESCE(SUM(deposit), 0)) DESC
+    ORDER BY (coalesce(sum(withdrawal), 0) + coalesce(sum(deposit), 0)) DESC
   `);
-  return (result.rows ?? []).map((r) => {
+  return rows.map((r) => {
     const person = DEFAULT_PEOPLE.find((p) => p.id === r.person_id);
     return {
       personId: r.person_id,
       displayName: person?.displayName ?? r.person_id,
       relationship: person?.relationship ?? "other",
       txnCount: r.txn_count,
-      totalSent: Number(r.total_sent),
-      totalReceived: Number(r.total_received),
-      net: Number(r.total_sent) - Number(r.total_received),
-      lastTxnDate: r.last_txn_date ?? null,
+      totalSent: Number(r.total_sent ?? 0),
+      totalReceived: Number(r.total_received ?? 0),
+      net: Number(r.total_sent ?? 0) - Number(r.total_received ?? 0),
+      lastTxnDate: r.last_txn_date,
     };
   });
 }
 
-export interface MonthlyBucket {
-  /** YYYY-MM */
-  month: string;
+// ============================================================================
+// Categorized spending
+// ============================================================================
+
+export interface CategorySummary {
+  category: string;
+  group: string;
   txnCount: number;
   totalOut: number;
   totalIn: number;
-  /** net = totalIn - totalOut. Positive = saved, negative = bled. */
-  net: number;
 }
 
-/**
- * Per-month totals for the trend chart. Excludes Investment + Transfer (same
- * "real spend" definition as getSpendByCategory). Ordered oldest → newest.
- */
-export async function getMonthlySpend(): Promise<MonthlyBucket[]> {
-  const db = await getDb();
-  const result = await db.execute<{
-    month: string;
+export async function getSpendByCategory(
+  opts: { excludeNonSpend?: boolean; limit?: number } = {},
+): Promise<CategorySummary[]> {
+  const limit = opts.limit ?? 25;
+  // Defensive filter for the "Transfer:..." / "Investment:..." groups: those
+  // are intra-account hops, not real spending.
+  const filter = opts.excludeNonSpend
+    ? sql`AND category IS NOT NULL AND category NOT LIKE 'Transfer:%' AND category NOT LIKE 'Investment:%'`
+    : sql`AND category IS NOT NULL`;
+  const rows = db().all<{
+    category: string;
     txn_count: number;
-    total_out: number;
-    total_in: number;
+    total_out: number | null;
+    total_in: number | null;
   }>(sql`
-    SELECT
-      SUBSTRING(txn_date FROM 1 FOR 7) AS month,
-      COUNT(*)::int                       AS txn_count,
-      COALESCE(SUM(withdrawal), 0)::real  AS total_out,
-      COALESCE(SUM(deposit), 0)::real     AS total_in
+    SELECT category, count(*) AS txn_count,
+           coalesce(sum(withdrawal), 0) AS total_out,
+           coalesce(sum(deposit), 0) AS total_in
     FROM transactions
-    WHERE COALESCE(category, 'Uncategorized') NOT LIKE 'Investment:%'
-      AND COALESCE(category, 'Uncategorized') NOT LIKE 'Transfer:%'
-    GROUP BY SUBSTRING(txn_date FROM 1 FOR 7)
-    ORDER BY month ASC
+    WHERE 1=1 ${filter}
+    GROUP BY category
+    ORDER BY total_out DESC, total_in DESC
+    LIMIT ${limit}
   `);
-  return (result.rows ?? []).map((r) => {
-    const totalOut = Number(r.total_out);
-    const totalIn = Number(r.total_in);
-    return {
-      month: r.month,
-      txnCount: r.txn_count,
-      totalOut,
-      totalIn,
-      net: totalIn - totalOut,
-    };
-  });
-}
-
-export interface CategoryByMonth {
-  /** YYYY-MM */
-  month: string;
-  /** Top-level group ("Bills", "Food", …) */
-  group: string;
-  totalOut: number;
-}
-
-/**
- * Group-level spend pivoted by month. Powers the stacked-bar / heatmap view
- * in the monthly report.
- */
-export async function getCategorySpendByMonth(): Promise<CategoryByMonth[]> {
-  const db = await getDb();
-  const result = await db.execute<{
-    month: string;
-    grp: string;
-    total_out: number;
-  }>(sql`
-    SELECT
-      SUBSTRING(txn_date FROM 1 FOR 7) AS month,
-      SPLIT_PART(COALESCE(category, 'Uncategorized'), ':', 1) AS grp,
-      COALESCE(SUM(withdrawal), 0)::real AS total_out
-    FROM transactions
-    WHERE COALESCE(category, 'Uncategorized') NOT LIKE 'Investment:%'
-      AND COALESCE(category, 'Uncategorized') NOT LIKE 'Transfer:%'
-      AND withdrawal IS NOT NULL AND withdrawal > 0
-    GROUP BY month, grp
-    ORDER BY month ASC, total_out DESC
-  `);
-  return (result.rows ?? []).map((r) => ({
-    month: r.month,
-    group: r.grp,
-    totalOut: Number(r.total_out),
+  return rows.map((r) => ({
+    category: r.category,
+    group: r.category.split(":")[0] ?? r.category,
+    txnCount: r.txn_count,
+    totalOut: Number(r.total_out ?? 0),
+    totalIn: Number(r.total_in ?? 0),
   }));
 }
 
+// ============================================================================
+// Recent transactions (the bottom-of-dashboard table)
+// ============================================================================
+
 export interface RecentTxn {
+  id: number;
   txnDate: string;
-  narration: string;
+  txnTime: string | null;
+  narration: string | null;
+  counterparty: string | null;
+  counterpartyKind: string | null;
   withdrawal: number | null;
   deposit: number | null;
   closingBalance: number | null;
   category: string | null;
   personId: string | null;
+  /** Number of distinct sources that observed this row (1+). 2+ = multi-source enriched. */
+  sourceCount: number;
+  /** CSV of person_ids who share this expense. Drives the Friends UI. */
+  sharedWith: string[];
+  /** Total people in the split (1 = not shared, 3 = 3-way split). */
+  shareCount: number;
 }
 
 export async function getRecentTransactions(limit = 100): Promise<RecentTxn[]> {
-  const db = await getDb();
-  const result = await db.execute<{
+  const rows = db().all<{
+    id: number;
     txn_date: string;
-    narration: string;
+    txn_time: string | null;
+    narration: string | null;
+    counterparty: string | null;
+    counterparty_kind: string | null;
     withdrawal: number | null;
     deposit: number | null;
     closing_balance: number | null;
     category: string | null;
     person_id: string | null;
+    source_count: number;
+    shared_with: string | null;
+    share_count: number;
   }>(sql`
-    SELECT txn_date, narration, withdrawal, deposit, closing_balance, category, person_id
-    FROM transactions
-    ORDER BY txn_date DESC, id DESC
+    SELECT t.id, t.txn_date, t.txn_time, t.narration, t.counterparty, t.counterparty_kind,
+           t.withdrawal, t.deposit, t.closing_balance, t.category, t.person_id,
+           t.shared_with, t.share_count,
+           (SELECT count(DISTINCT source_type) FROM transaction_sources WHERE transaction_id = t.id) AS source_count
+    FROM transactions t
+    ORDER BY t.txn_date DESC, coalesce(t.txn_time, '00:00') DESC, t.id DESC
     LIMIT ${limit}
   `);
-  return (result.rows ?? []).map((r) => ({
+  return rows.map((r) => ({
+    id: r.id,
     txnDate: r.txn_date,
+    txnTime: r.txn_time,
     narration: r.narration,
+    counterparty: r.counterparty,
+    counterpartyKind: r.counterparty_kind,
     withdrawal: r.withdrawal,
     deposit: r.deposit,
     closingBalance: r.closing_balance,
     category: r.category,
     personId: r.person_id,
+    sourceCount: r.source_count,
+    sharedWith: r.shared_with
+      ? r.shared_with.split(",").map((s) => s.trim()).filter(Boolean)
+      : [],
+    shareCount: r.share_count ?? 1,
   }));
 }
 
-// ---- Internal helpers (raw SQL, type-erased) ----
+// ============================================================================
+// NEW: Time-of-day × Day-of-week heatmap
+// ============================================================================
 
-interface UpsertAccountInput {
-  bank: string;
-  type: string;
-  last4: string;
-  customerName: string | null;
-}
-
-async function upsertAccount(input: UpsertAccountInput): Promise<number> {
-  const db = await getDb();
-  // Single-statement upsert returning id
-  const result = await db.execute<{ id: number }>(sql`
-    INSERT INTO accounts (bank, type, last4, customer_name)
-    VALUES (${input.bank}, ${input.type}, ${input.last4}, ${input.customerName})
-    ON CONFLICT (bank, type, last4) DO UPDATE SET
-      customer_name = COALESCE(EXCLUDED.customer_name, accounts.customer_name)
-    RETURNING id
-  `);
-  const id = result.rows?.[0]?.id;
-  if (id == null) throw new Error("upsertAccount: no id returned");
-  return id;
-}
-
-interface UpsertStatementInput {
-  accountId: number;
-  sourceFile: string;
-  periodFrom: string | null;
-  periodTo: string | null;
+export interface HeatmapCell {
+  /** 0 = Sunday … 6 = Saturday */
+  dayOfWeek: number;
+  /** 0–23 */
+  hour: number;
+  totalSpend: number;
   txnCount: number;
 }
 
-async function upsertStatement(input: UpsertStatementInput): Promise<number> {
-  const db = await getDb();
-  const result = await db.execute<{ id: number }>(sql`
-    INSERT INTO statements (account_id, source_file, period_from, period_to, txn_count)
-    VALUES (${input.accountId}, ${input.sourceFile}, ${input.periodFrom}, ${input.periodTo}, ${input.txnCount})
-    ON CONFLICT (source_file) DO UPDATE SET
-      txn_count = EXCLUDED.txn_count
-    RETURNING id
+export async function getTimeOfDayHeatmap(): Promise<HeatmapCell[]> {
+  const rows = db().all<{ dow: number; hour: number; total: number; n: number }>(sql`
+    SELECT
+      cast(strftime('%w', txn_date) AS INTEGER) AS dow,
+      cast(substr(txn_time, 1, 2) AS INTEGER)   AS hour,
+      coalesce(sum(withdrawal), 0)              AS total,
+      count(*)                                  AS n
+    FROM transactions
+    WHERE txn_time IS NOT NULL
+      AND withdrawal IS NOT NULL
+    GROUP BY dow, hour
   `);
-  const id = result.rows?.[0]?.id;
-  if (id == null) throw new Error("upsertStatement: no id returned");
-  return id;
+  return rows.map((r) => ({
+    dayOfWeek: r.dow,
+    hour: r.hour,
+    totalSpend: Number(r.total ?? 0),
+    txnCount: r.n,
+  }));
 }
 
-interface InsertTxnInput {
+// ============================================================================
+// NEW: Multi-year monthly spend trajectory
+// ============================================================================
+
+export interface MonthlySpendPoint {
+  /** 'YYYY-MM' */
+  yearMonth: string;
+  totalOut: number;
+  totalIn: number;
+  txnCount: number;
+}
+
+export async function getMonthlyTrajectory(): Promise<MonthlySpendPoint[]> {
+  const rows = db().all<{
+    ym: string;
+    total_out: number | null;
+    total_in: number | null;
+    n: number;
+  }>(sql`
+    SELECT substr(txn_date, 1, 7)            AS ym,
+           coalesce(sum(withdrawal), 0)      AS total_out,
+           coalesce(sum(deposit), 0)         AS total_in,
+           count(*)                          AS n
+    FROM transactions
+    GROUP BY ym
+    ORDER BY ym
+  `);
+  return rows.map((r) => ({
+    yearMonth: r.ym,
+    totalOut: Number(r.total_out ?? 0),
+    totalIn: Number(r.total_in ?? 0),
+    txnCount: r.n,
+  }));
+}
+
+// ============================================================================
+// NEW: GitHub-style daily spending calendar
+// ============================================================================
+
+export interface DailySpendPoint {
   txnDate: string;
-  valueDate: string | null;
-  narration: string;
-  refNo: string | null;
-  withdrawal: number | null;
-  deposit: number | null;
-  closingBalance: number | null;
-  sourceRowIdx: number;
+  totalOut: number;
+  txnCount: number;
+}
+
+export async function getDailySpend(): Promise<DailySpendPoint[]> {
+  const rows = db().all<{ d: string; total: number; n: number }>(sql`
+    SELECT txn_date AS d,
+           coalesce(sum(withdrawal), 0) AS total,
+           count(*) AS n
+    FROM transactions
+    WHERE withdrawal IS NOT NULL
+    GROUP BY txn_date
+    ORDER BY txn_date
+  `);
+  return rows.map((r) => ({
+    txnDate: r.d,
+    totalOut: Number(r.total ?? 0),
+    txnCount: r.n,
+  }));
+}
+
+// ============================================================================
+// MONTHLY REPORT — the "review your spending" page
+// ============================================================================
+//
+// Built around an ADHD-friendly review flow: every outgoing transaction in
+// the chosen month is bucketed into one of four queues so the user can chunk
+// the work:
+//
+//   1. house-shape  — bills/groceries/utilities ≥ ₹500, suggest split with flatmates
+//   2. chase-up     — outgoing UPI to a registered friend with no return inflow
+//                     within 14 days; suggest "ask for payback"
+//   3. usual-split  — same counterparty has been shared with the same friends
+//                     ≥2 times before; one-click accept the same split
+//   4. other        — everything else outgoing, no auto-suggestion
+//
+// Already-reviewed and already-shared rows show up in a collapsed "done"
+// section so progress is visible (and undo is one click).
+
+export type ReviewBucket = "house" | "chase" | "usual" | "other" | "done";
+
+export interface ReportTxn {
+  id: number;
+  txnDate: string;
+  txnTime: string | null;
+  counterparty: string | null;
+  narration: string | null;
+  counterpartyKind: string | null;
+  withdrawal: number;
+  category: string | null;
+  personId: string | null;
+  reviewed: boolean;
+  /** Empty array when not yet shared; populated when the user has split it. */
+  sharedWith: string[];
+  shareCount: number;
+  /** Account label e.g. "HDFC Savings XX2491". */
+  accountLabel: string;
+  /** Bucket assigned by the auto-classifier. */
+  bucket: ReviewBucket;
+  /** Pre-baked one-click suggestion, when applicable. */
+  suggestion: {
+    /** Friends to suggest splitting with. */
+    personIds: string[];
+    /** Human-readable reason ("Usually split with Rahul + Shivam", etc.). */
+    reason: string;
+  } | null;
+}
+
+export interface MonthlyReport {
+  yearMonth: string;
+  /** All months we have data for, sorted ASC. Used by the month picker. */
+  availableMonths: string[];
+  totalOut: number;
+  totalIn: number;
+  txnCount: number;
+  reviewedCount: number;
+  reviewedAmount: number;
+  /** Per-bucket transaction lists, all sorted by date asc. */
+  buckets: Record<ReviewBucket, ReportTxn[]>;
+}
+
+/** ISO 'YYYY-MM' or `null` for "current month derived from latest txn date". */
+export async function getMonthlyReport(yearMonth: string | null): Promise<MonthlyReport> {
+  const months = db()
+    .all<{ ym: string }>(sql`
+      SELECT DISTINCT substr(txn_date, 1, 7) AS ym FROM transactions ORDER BY ym
+    `)
+    .map((r) => r.ym);
+
+  const ym = yearMonth ?? months[months.length - 1] ?? new Date().toISOString().slice(0, 7);
+  // Defensive — never let an arbitrary string into the SQL substr() match.
+  if (!/^\d{4}-\d{2}$/.test(ym)) {
+    return {
+      yearMonth: ym,
+      availableMonths: months,
+      totalOut: 0,
+      totalIn: 0,
+      txnCount: 0,
+      reviewedCount: 0,
+      reviewedAmount: 0,
+      buckets: { house: [], chase: [], usual: [], other: [], done: [] },
+    };
+  }
+
+  // Top-of-month counters.
+  const top = db().all<{
+    n: number;
+    out: number;
+    in_: number;
+    reviewed_n: number;
+    reviewed_amt: number;
+  }>(sql`
+    SELECT
+      count(*)                              AS n,
+      coalesce(sum(withdrawal), 0)          AS out,
+      coalesce(sum(deposit), 0)             AS in_,
+      count(*) FILTER (WHERE reviewed = 1)  AS reviewed_n,
+      coalesce(sum(withdrawal) FILTER (WHERE reviewed = 1), 0) AS reviewed_amt
+    FROM transactions
+    WHERE substr(txn_date, 1, 7) = ${ym}
+  `)[0]!;
+
+  // Every outgoing for the month.
+  const rawTxns = db().all<{
+    id: number;
+    txn_date: string;
+    txn_time: string | null;
+    counterparty: string | null;
+    narration: string | null;
+    counterparty_kind: string | null;
+    withdrawal: number | null;
+    category: string | null;
+    person_id: string | null;
+    reviewed: number;
+    shared_with: string | null;
+    share_count: number;
+    bank: string;
+    type: string;
+    last4: string;
+  }>(sql`
+    SELECT t.id, t.txn_date, t.txn_time, t.counterparty, t.narration,
+           t.counterparty_kind, t.withdrawal, t.category, t.person_id,
+           t.reviewed, t.shared_with, t.share_count,
+           a.bank, a.type, a.last4
+    FROM transactions t
+    JOIN accounts a ON a.id = t.account_id
+    WHERE substr(t.txn_date, 1, 7) = ${ym}
+      AND t.withdrawal IS NOT NULL
+      AND t.withdrawal > 0
+    ORDER BY t.txn_date ASC, coalesce(t.txn_time, '00:00') ASC, t.id ASC
+  `);
+
+  // Pre-compute "usually split with whom" by counterparty across ALL history.
+  const usualByCounterparty = computeUsualSharing();
+  // And: incoming UPI from each person within 14 days *of any outgoing*, used
+  // for the chase-up detector.
+  const incomingFromPerson = computeIncomingsByPersonByDate();
+  // Flatmates from the registry, for house-shape suggestions.
+  const flatmates = DEFAULT_PEOPLE.filter((p) => p.relationship === "flatmate").map((p) => p.id);
+
+  const buckets: Record<ReviewBucket, ReportTxn[]> = {
+    house: [],
+    chase: [],
+    usual: [],
+    other: [],
+    done: [],
+  };
+
+  for (const r of rawTxns) {
+    const sharedWith = r.shared_with
+      ? r.shared_with.split(",").map((s) => s.trim()).filter(Boolean)
+      : [];
+    const isReviewed = Boolean(r.reviewed);
+    const isShared = sharedWith.length > 0;
+    const amount = Number(r.withdrawal ?? 0);
+
+    const accountLabel = `${r.bank} ${r.type === "credit_card" ? "CC" : "Savings"} XX${r.last4}`;
+
+    let bucket: ReviewBucket = "other";
+    let suggestion: ReportTxn["suggestion"] = null;
+
+    // Done = already reviewed OR already shared (the latter is implicitly settled).
+    if (isReviewed || isShared) {
+      bucket = "done";
+    } else {
+      const usual = r.counterparty ? usualByCounterparty.get(r.counterparty) : undefined;
+      if (usual && usual.personIds.length > 0) {
+        bucket = "usual";
+        suggestion = {
+          personIds: usual.personIds,
+          reason: `Usually split with ${usual.displayNames.join(" + ")} (last ${usual.count}× with this merchant)`,
+        };
+      } else if (
+        r.person_id &&
+        amount >= 500 &&
+        !hasMatchingReturnInflow(r.person_id, r.txn_date, amount, incomingFromPerson)
+      ) {
+        bucket = "chase";
+        const friend = DEFAULT_PEOPLE.find((p) => p.id === r.person_id);
+        suggestion = {
+          personIds: r.person_id ? [r.person_id] : [],
+          reason: `Paid ${friend?.displayName ?? r.person_id} — no return UPI in 14 days. Forgot to ask back?`,
+        };
+      } else if (isHouseShape(r.category, amount) && flatmates.length > 0) {
+        bucket = "house";
+        suggestion = {
+          personIds: flatmates,
+          reason: `Looks like a house expense — suggest split with flatmates (${flatmates
+            .map((id) => DEFAULT_PEOPLE.find((p) => p.id === id)?.displayName?.split(" ")[0] ?? id)
+            .join(" + ")})`,
+        };
+      } else {
+        bucket = "other";
+      }
+    }
+
+    buckets[bucket].push({
+      id: r.id,
+      txnDate: r.txn_date,
+      txnTime: r.txn_time,
+      counterparty: r.counterparty,
+      narration: r.narration,
+      counterpartyKind: r.counterparty_kind,
+      withdrawal: amount,
+      category: r.category,
+      personId: r.person_id,
+      reviewed: isReviewed,
+      sharedWith,
+      shareCount: r.share_count ?? 1,
+      accountLabel,
+      bucket,
+      suggestion,
+    });
+  }
+
+  return {
+    yearMonth: ym,
+    availableMonths: months,
+    totalOut: Number(top.out ?? 0),
+    totalIn: Number(top.in_ ?? 0),
+    txnCount: top.n,
+    reviewedCount: top.reviewed_n,
+    reviewedAmount: Number(top.reviewed_amt ?? 0),
+    buckets,
+  };
 }
 
 /**
- * Apply the default rule set to a narration. Returns the matched category +
- * the rule pattern that matched (for traceability — lets the user understand
- * "why was this tagged as X?").
- *
- * If the user has already tagged a transaction (category column non-null in
- * a re-import scenario), we DON'T re-categorize on insert; the upsert path
- * handles that separately.
+ * Categories that look like flatmate-shared house expenses. Conservative on
+ * purpose — false positives waste the user's attention.
  */
-function autoCategory(narration: string): { category: string; categoryRule: string | null } {
-  const result = categorize(narration, DEFAULT_RULES);
-  return { category: result.category, categoryRule: result.matchedRule };
+function isHouseShape(category: string | null, amount: number): boolean {
+  if (!category || amount < 500) return false;
+  return (
+    category.startsWith("Bills:Electricity") ||
+    category.startsWith("Bills:Internet") ||
+    category.startsWith("Bills:Mobile") ||
+    category.startsWith("Bills:Rent") ||
+    category.startsWith("Bills:Gas") ||
+    category.startsWith("Food:Groceries") ||
+    category.startsWith("Food:Quick Commerce") ||
+    category.startsWith("Household:")
+  );
 }
 
-/** Identify a known person from the narration. Returns null when unknown. */
-function autoPerson(narration: string): string | null {
-  const m = identifyPerson(narration, DEFAULT_PEOPLE);
-  return m?.personId ?? null;
+interface UsualSharing {
+  personIds: string[];
+  displayNames: string[];
+  count: number;
 }
 
-async function bulkInsertTxns(
-  accountId: number,
-  statementId: number,
-  rows: InsertTxnInput[],
-): Promise<{ inserted: number; skippedSameStatement: number; skippedDuplicate: number }> {
-  const db = await getDb();
-  if (rows.length === 0) return { inserted: 0, skippedSameStatement: 0, skippedDuplicate: 0 };
+/**
+ * Per-counterparty most-frequent shared_with set, across all history. If a
+ * user has split Blinkit with [rahul, shivam] 5 times before, the next
+ * Blinkit suggestion is the same trio. Min support = 2 to avoid one-offs.
+ */
+function computeUsualSharing(): Map<string, UsualSharing> {
+  const rows = db().all<{ counterparty: string; shared_with: string; n: number }>(sql`
+    SELECT counterparty, shared_with, count(*) AS n
+    FROM transactions
+    WHERE counterparty IS NOT NULL AND shared_with IS NOT NULL AND shared_with != ''
+    GROUP BY counterparty, shared_with
+  `);
+  const byCounterparty = new Map<string, UsualSharing>();
+  for (const r of rows) {
+    if (r.n < 2) continue;
+    const personIds = r.shared_with.split(",").map((s) => s.trim()).filter(Boolean);
+    if (personIds.length === 0) continue;
+    const existing = byCounterparty.get(r.counterparty);
+    if (!existing || existing.count < r.n) {
+      const displayNames = personIds.map(
+        (id) =>
+          DEFAULT_PEOPLE.find((p) => p.id === id)?.displayName?.split(" ")[0] ?? id,
+      );
+      byCounterparty.set(r.counterparty, { personIds, displayNames, count: r.n });
+    }
+  }
+  return byCounterparty;
+}
 
-  let inserted = 0;
-  let skippedSameStatement = 0;
-  let skippedDuplicate = 0;
+interface IncomingMap {
+  /** Map of personId → array of [date, amount] tuples, sorted by date asc. */
+  byPerson: Map<string, { date: string; amount: number }[]>;
+}
 
-  await db.execute(sql`BEGIN`);
-  try {
-    for (const r of rows) {
-      const contentHash = computeContentHash({
-        txnDate: r.txnDate,
-        refNo: r.refNo,
+function computeIncomingsByPersonByDate(): IncomingMap {
+  const rows = db().all<{ person_id: string; date: string; amount: number }>(sql`
+    SELECT person_id, txn_date AS date, deposit AS amount
+    FROM transactions
+    WHERE person_id IS NOT NULL AND deposit IS NOT NULL AND deposit > 0
+    ORDER BY txn_date ASC
+  `);
+  const byPerson = new Map<string, { date: string; amount: number }[]>();
+  for (const r of rows) {
+    const arr = byPerson.get(r.person_id) ?? [];
+    arr.push({ date: r.date, amount: Number(r.amount) });
+    byPerson.set(r.person_id, arr);
+  }
+  return { byPerson };
+}
+
+/**
+ * Heuristic: did this person return at least `amount × 0.8` to me within 14
+ * days of `outgoingDate`? If yes, the chase-up is probably already settled.
+ * The 80% threshold permits "rounded down" reimbursements (paid back ₹500
+ * for a ₹520 expense).
+ */
+function hasMatchingReturnInflow(
+  personId: string,
+  outgoingDate: string,
+  outgoingAmount: number,
+  incoming: IncomingMap,
+): boolean {
+  const events = incoming.byPerson.get(personId) ?? [];
+  const outDate = new Date(outgoingDate + "T00:00:00Z").getTime();
+  const fourteenDays = 14 * 86400 * 1000;
+  for (const e of events) {
+    const eDate = new Date(e.date + "T00:00:00Z").getTime();
+    if (eDate < outDate) continue;
+    if (eDate - outDate > fourteenDays) break;
+    if (e.amount >= outgoingAmount * 0.8) return true;
+  }
+  return false;
+}
+
+// ============================================================================
+// FRIENDS — Splitwise-style settlement
+// ============================================================================
+//
+// Two flows compose into a per-friend net balance:
+//   1. Direct UPI: every outgoing to F adds to "F owes you"; every incoming
+//      from F subtracts. This already works without any marking — straight
+//      from person_id on the canonical ledger.
+//   2. Shared expenses: when you mark a withdrawal as shared with N people
+//      (yourself + N-1 friends), each of those friends owes you
+//      withdrawal / share_count.
+//
+// Convention: positive net = friend owes you, negative = you owe them.
+
+export interface FriendOverviewRow {
+  personId: string;
+  displayName: string;
+  relationship: string;
+  /** Number of canonical transactions where this person is the counterparty. */
+  directTxnCount: number;
+  /** Direct outgoing UPIs you've sent to them. */
+  directOut: number;
+  /** Direct incoming UPIs they've sent you. */
+  directIn: number;
+  /** Number of shared transactions where this person is in `shared_with`. */
+  sharedTxnCount: number;
+  /** Their share of all shared expenses you've marked: Σ(amount / share_count). */
+  sharedOwed: number;
+  /** Net: positive = they owe you, negative = you owe them. */
+  net: number;
+  lastTxnDate: string | null;
+}
+
+/**
+ * One row per known person with the full settlement breakdown. Both flows
+ * are aggregated in a single pass over the transactions table so the
+ * dashboard's /friends view renders in one query.
+ */
+export async function getFriendsOverview(): Promise<FriendOverviewRow[]> {
+  // Direct flows (per person_id).
+  const directRows = db().all<{
+    person_id: string;
+    n: number;
+    total_out: number | null;
+    total_in: number | null;
+    last_date: string | null;
+  }>(sql`
+    SELECT
+      person_id,
+      count(*)                              AS n,
+      coalesce(sum(withdrawal), 0)          AS total_out,
+      coalesce(sum(deposit), 0)             AS total_in,
+      max(txn_date)                         AS last_date
+    FROM transactions
+    WHERE person_id IS NOT NULL
+    GROUP BY person_id
+  `);
+
+  // Shared-expense flows. Each shared row contributes amount/share_count to
+  // every person id in its `shared_with` CSV. We unroll this in code rather
+  // than SQL since SQLite has no native string_split.
+  const sharedRows = db().all<{
+    id: number;
+    withdrawal: number;
+    share_count: number;
+    shared_with: string;
+  }>(sql`
+    SELECT id, withdrawal, share_count, shared_with
+    FROM transactions
+    WHERE shared_with IS NOT NULL
+      AND shared_with != ''
+      AND withdrawal IS NOT NULL
+      AND withdrawal > 0
+      AND share_count > 1
+  `);
+
+  const sharedAgg = new Map<string, { count: number; total: number }>();
+  for (const r of sharedRows) {
+    const others = r.shared_with.split(",").map((s) => s.trim()).filter(Boolean);
+    const perHead = r.withdrawal / r.share_count;
+    for (const pid of others) {
+      const cur = sharedAgg.get(pid) ?? { count: 0, total: 0 };
+      cur.count += 1;
+      cur.total += perHead;
+      sharedAgg.set(pid, cur);
+    }
+  }
+
+  // Merge by personId. Build a union of all person_ids seen in either flow.
+  const allPids = new Set<string>([
+    ...directRows.map((r) => r.person_id),
+    ...sharedAgg.keys(),
+  ]);
+  const out: FriendOverviewRow[] = [];
+  for (const pid of allPids) {
+    const direct = directRows.find((r) => r.person_id === pid);
+    const shared = sharedAgg.get(pid) ?? { count: 0, total: 0 };
+    const person = DEFAULT_PEOPLE.find((p) => p.id === pid);
+    const directOut = Number(direct?.total_out ?? 0);
+    const directIn = Number(direct?.total_in ?? 0);
+    out.push({
+      personId: pid,
+      displayName: person?.displayName ?? pid,
+      relationship: person?.relationship ?? "other",
+      directTxnCount: direct?.n ?? 0,
+      directOut,
+      directIn,
+      sharedTxnCount: shared.count,
+      sharedOwed: shared.total,
+      // Owes-you = direct outgoing + their share - direct incoming.
+      net: directOut + shared.total - directIn,
+      lastTxnDate: direct?.last_date ?? null,
+    });
+  }
+  // Show biggest absolute balances first so the most actionable rows are up top.
+  return out.sort((a, b) => Math.abs(b.net) - Math.abs(a.net));
+}
+
+export interface FriendDetail {
+  person: FriendOverviewRow;
+  /** Direct transactions (UPIs to/from this person, regardless of shared marker). */
+  directTxns: DrillDownTxn[];
+  /** Shared transactions where this person is in the shared_with CSV. */
+  sharedTxns: (DrillDownTxn & { shareCount: number; sharedWith: string[]; perHead: number })[];
+}
+
+export async function getFriendDetail(personId: string): Promise<FriendDetail | null> {
+  if (!/^[a-z][a-z0-9-]*$/i.test(personId)) return null;
+
+  // Reuse the overview to get aggregates (one row).
+  const all = await getFriendsOverview();
+  const person = all.find((p) => p.personId === personId);
+  if (!person) return null;
+
+  // Direct txns (this person is counterparty).
+  const direct = db().all<{
+    id: number;
+    txn_date: string;
+    txn_time: string | null;
+    counterparty: string | null;
+    narration: string | null;
+    counterparty_kind: string | null;
+    withdrawal: number | null;
+    deposit: number | null;
+    category: string | null;
+    bank: string;
+    type: string;
+    last4: string;
+  }>(sql`
+    SELECT t.id, t.txn_date, t.txn_time, t.counterparty, t.narration,
+           t.counterparty_kind, t.withdrawal, t.deposit, t.category,
+           a.bank, a.type, a.last4
+    FROM transactions t
+    JOIN accounts a ON a.id = t.account_id
+    WHERE t.person_id = ${personId}
+    ORDER BY t.txn_date DESC, coalesce(t.txn_time, '00:00') DESC, t.id DESC
+  `);
+
+  // Shared txns. Match `shared_with` against this personId — we use LIKE
+  // anchored against CSV boundaries to avoid 'rahul' matching 'rahul-d'.
+  const likeNeedle = `%${personId}%`;
+  const sharedRaw = db().all<{
+    id: number;
+    txn_date: string;
+    txn_time: string | null;
+    counterparty: string | null;
+    narration: string | null;
+    counterparty_kind: string | null;
+    withdrawal: number | null;
+    deposit: number | null;
+    category: string | null;
+    bank: string;
+    type: string;
+    last4: string;
+    share_count: number;
+    shared_with: string;
+  }>(sql`
+    SELECT t.id, t.txn_date, t.txn_time, t.counterparty, t.narration,
+           t.counterparty_kind, t.withdrawal, t.deposit, t.category,
+           a.bank, a.type, a.last4,
+           t.share_count, t.shared_with
+    FROM transactions t
+    JOIN accounts a ON a.id = t.account_id
+    WHERE t.shared_with LIKE ${likeNeedle}
+    ORDER BY t.txn_date DESC, coalesce(t.txn_time, '00:00') DESC, t.id DESC
+  `);
+  // Defensive in-code filter: confirm exact CSV membership.
+  const sharedTxns = sharedRaw
+    .map((r) => {
+      const sharedWith = r.shared_with.split(",").map((s) => s.trim()).filter(Boolean);
+      if (!sharedWith.includes(personId)) return null;
+      const perHead = (r.withdrawal ?? 0) / r.share_count;
+      return {
+        id: r.id,
+        txnDate: r.txn_date,
+        txnTime: r.txn_time,
+        counterparty: r.counterparty,
+        narration: r.narration,
+        counterpartyKind: r.counterparty_kind,
         withdrawal: r.withdrawal,
         deposit: r.deposit,
-        narration: r.narration,
-      });
+        category: r.category,
+        accountBank: r.bank,
+        accountType: r.type,
+        accountLast4: r.last4,
+        shareCount: r.share_count,
+        sharedWith,
+        perHead,
+      };
+    })
+    .filter((x): x is NonNullable<typeof x> => x !== null);
 
-      // Two layers of dedup, distinguished for the user:
-      //   1. (statement_id, source_row_idx) — re-uploading the SAME PDF
-      //   2. (account_id, content_hash)     — same txn from a DIFFERENT PDF
-      // Postgres ON CONFLICT can target only one constraint per statement,
-      // so we check the cross-statement dedup first, then attempt the insert.
-      const existing = await db.execute<{ id: number; statement_id: number }>(sql`
-        SELECT id, statement_id FROM transactions
-        WHERE account_id = ${accountId} AND content_hash = ${contentHash}
-        LIMIT 1
-      `);
-      if ((existing.rows?.length ?? 0) > 0) {
-        const sameStatement = existing.rows![0]!.statement_id === statementId;
-        if (sameStatement) skippedSameStatement++;
-        else skippedDuplicate++;
-        continue;
-      }
+  // Single batched lookup for item enrichment across both direct + shared
+  // sets; cheaper than two separate joins.
+  const allIds = [...direct.map((r) => r.id), ...sharedTxns.map((r) => r.id)];
+  const itemMap = getItemEnrichmentsForTxns(allIds);
+  return {
+    person,
+    directTxns: direct.map((r) => ({
+      id: r.id,
+      txnDate: r.txn_date,
+      txnTime: r.txn_time,
+      counterparty: r.counterparty,
+      narration: r.narration,
+      counterpartyKind: r.counterparty_kind,
+      withdrawal: r.withdrawal,
+      deposit: r.deposit,
+      category: r.category,
+      accountBank: r.bank,
+      accountType: r.type,
+      accountLast4: r.last4,
+      items: itemMap.get(r.id) ?? null,
+    })),
+    sharedTxns: sharedTxns.map((t) => ({
+      ...t,
+      items: itemMap.get(t.id) ?? null,
+    })),
+  };
+}
 
-      const { category, categoryRule } = autoCategory(r.narration);
-      const personId = autoPerson(r.narration);
-      const result = await db.execute<{ id: number }>(sql`
-        INSERT INTO transactions (
-          account_id, statement_id, txn_date, value_date, narration, ref_no,
-          withdrawal, deposit, closing_balance, source_row_idx, content_hash,
-          category, category_rule, person_id
-        ) VALUES (
-          ${accountId}, ${statementId}, ${r.txnDate}, ${r.valueDate}, ${r.narration},
-          ${r.refNo}, ${r.withdrawal}, ${r.deposit}, ${r.closingBalance}, ${r.sourceRowIdx},
-          ${contentHash}, ${category}, ${categoryRule}, ${personId}
-        )
-        ON CONFLICT (statement_id, source_row_idx) DO NOTHING
-        RETURNING id
-      `);
-      if ((result.rows?.length ?? 0) > 0) inserted++;
-      else skippedSameStatement++;
+/**
+ * Candidates for splitting: high-spend "shareable-shape" transactions that
+ * aren't already marked as shared. Used by /friends to nudge the user
+ * toward marking up their backlog without them having to scroll the whole
+ * recent list.
+ *
+ * Heuristic: outgoing, amount ≥ ₹500, category is in a "splittable" set
+ * (food / travel / groceries), and shared_with is null/empty.
+ */
+export interface CandidateShare {
+  id: number;
+  txnDate: string;
+  txnTime: string | null;
+  counterparty: string | null;
+  narration: string | null;
+  amount: number;
+  category: string | null;
+  /** A hint built from amount + category: 'big-food', 'big-travel', etc. */
+  hint: string;
+}
+
+export async function getCandidateShares(limit = 20): Promise<CandidateShare[]> {
+  const rows = db().all<{
+    id: number;
+    txn_date: string;
+    txn_time: string | null;
+    counterparty: string | null;
+    narration: string | null;
+    withdrawal: number;
+    category: string | null;
+  }>(sql`
+    SELECT id, txn_date, txn_time, counterparty, narration, withdrawal, category
+    FROM transactions
+    WHERE withdrawal IS NOT NULL
+      AND withdrawal >= 500
+      AND (shared_with IS NULL OR shared_with = '')
+      AND category IS NOT NULL
+      AND (
+        category LIKE 'Food:%'
+        OR category LIKE 'Travel:%'
+        OR category LIKE 'Entertainment:%'
+        OR category = 'Food:Quick Commerce'
+      )
+    ORDER BY withdrawal DESC
+    LIMIT ${limit}
+  `);
+  return rows.map((r) => ({
+    id: r.id,
+    txnDate: r.txn_date,
+    txnTime: r.txn_time,
+    counterparty: r.counterparty,
+    narration: r.narration,
+    amount: Number(r.withdrawal),
+    category: r.category,
+    hint: hintFor(r.category, Number(r.withdrawal)),
+  }));
+}
+
+function hintFor(category: string | null, amount: number): string {
+  if (!category) return "splittable";
+  if (category.startsWith("Travel:")) return amount >= 5000 ? "trip-cost" : "transport";
+  if (category.startsWith("Food:Quick Commerce")) return "groceries";
+  if (category.startsWith("Food:")) return amount >= 1500 ? "group-meal" : "food";
+  if (category.startsWith("Entertainment:")) return "outing";
+  return "splittable";
+}
+
+// ============================================================================
+// NEW: Per-day drill-down — used by the SpendingCalendar's click handler
+// ============================================================================
+
+export interface DrillDownTxn {
+  id: number;
+  txnDate: string;
+  txnTime: string | null;
+  counterparty: string | null;
+  narration: string | null;
+  counterpartyKind: string | null;
+  withdrawal: number | null;
+  deposit: number | null;
+  category: string | null;
+  accountBank: string;
+  accountType: string;
+  accountLast4: string;
+  /**
+   * Item-level breakdown from a Swiggy / Zomato receipt email, when this
+   * transaction has one. Surfaced by the `enrich-items` CLI; null otherwise.
+   */
+  items?: ItemEnrichment | null;
+}
+
+/**
+ * Shape of a Swiggy / Zomato item-enrichment block. Mirrors the
+ * `transaction_sources.raw_json` payload that the email backfill writes,
+ * narrowed to just the fields the UI cares about.
+ */
+export interface ItemEnrichment {
+  /** Which extractor produced this — "swiggy" | "zomato". */
+  extractorId: string;
+  /** Order kind: "food_delivery" | "instamart" | "zomato_delivery" | "zomato_dining". */
+  kind: string;
+  /** Order id when known. */
+  orderId: string | null;
+  /** Restaurant or store name. */
+  restaurant: string | null;
+  /** Order total — usually within a rupee of the canonical withdrawal. */
+  amount: number;
+  /** Line items. Price is only present for Swiggy; Zomato emails don't break it down per line. */
+  items: Array<{ qty: number; name: string; price?: number }>;
+  /** One-line summary the extractor produced. */
+  summary: string;
+}
+
+/**
+ * Parse the raw_json blob written by an enrichment source (Swiggy / Zomato
+ * email, or Zepto invoice PDF) back into the UI-facing ItemEnrichment
+ * shape. Returns null when the blob doesn't look like one of ours.
+ *
+ * The source_type tells us which shape to expect:
+ *   - swiggy_email / zomato_email → blob has {extractorId, kind, restaurant,
+ *     orderId, amount, items[{qty, name, price?}], summary}
+ *   - zepto_invoice → blob has {orderNo, invoiceNo, date, amount,
+ *     items[{seq, name, qty, amount}]}
+ */
+function parseItemEnrichment(
+  rawJson: string | null,
+  sourceType: string,
+): ItemEnrichment | null {
+  if (!rawJson) return null;
+  try {
+    const obj = JSON.parse(rawJson) as Record<string, unknown>;
+    if (sourceType === "zepto_invoice") {
+      const items = Array.isArray(obj.items)
+        ? (obj.items as Array<Record<string, unknown>>)
+            .map((it) => ({
+              qty: Number(it.qty ?? 1),
+              name: String(it.name ?? ""),
+              // The invoice's per-line `amount` IS the line total in INR.
+              // The UI's ItemEnrichment uses `price` for the same notion.
+              price: it.amount != null ? Number(it.amount) : undefined,
+            }))
+            .filter((it) => it.name.length > 0)
+        : [];
+      return {
+        extractorId: "zepto_invoice",
+        kind: "instamart", // closest analogue in the existing icon set
+        orderId: obj.orderNo != null ? String(obj.orderNo) : null,
+        restaurant: null,
+        amount: Number(obj.amount ?? 0),
+        items,
+        summary: `Zepto order — ${items.length} item${items.length === 1 ? "" : "s"}`,
+      };
     }
-    await db.execute(sql`COMMIT`);
-  } catch (err) {
-    await db.execute(sql`ROLLBACK`);
-    throw err;
+    // Email-receipt shape (swiggy_email / zomato_email)
+    const items = Array.isArray(obj.items)
+      ? (obj.items as Array<Record<string, unknown>>)
+          .map((it) => ({
+            qty: Number(it.qty ?? 1),
+            name: String(it.name ?? ""),
+            price: it.price != null ? Number(it.price) : undefined,
+          }))
+          .filter((it) => it.name.length > 0)
+      : [];
+    return {
+      extractorId: String(obj.extractorId ?? ""),
+      kind: String(obj.kind ?? ""),
+      orderId: obj.orderId != null ? String(obj.orderId) : null,
+      restaurant: obj.restaurant != null ? String(obj.restaurant) : null,
+      amount: Number(obj.amount ?? 0),
+      items,
+      summary: String(obj.summary ?? ""),
+    };
+  } catch {
+    return null;
   }
-  return { inserted, skippedSameStatement, skippedDuplicate };
+}
+
+/**
+ * Pull email-derived item enrichment (if any) for every txn id in `ids`.
+ * Returns a map for cheap join-in-memory by the caller. Empty map when
+ * no rows match — never null.
+ *
+ * Picks one enrichment per txn even if multiple exist (Swiggy AND Zomato
+ * matched somehow): the one with the lowest source row id, which is the
+ * first to be ingested. In practice each txn has at most one.
+ */
+function getItemEnrichmentsForTxns(ids: number[]): Map<number, ItemEnrichment> {
+  const out = new Map<number, ItemEnrichment>();
+  if (ids.length === 0) return out;
+  const rows = db().all<{
+    transaction_id: number;
+    source_type: string;
+    raw_json: string;
+  }>(sql`
+    SELECT transaction_id, source_type, raw_json
+    FROM transaction_sources
+    WHERE source_type IN ('swiggy_email', 'zomato_email', 'zepto_invoice')
+      AND transaction_id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+    ORDER BY id ASC
+  `);
+  for (const r of rows) {
+    if (out.has(r.transaction_id)) continue;
+    const parsed = parseItemEnrichment(r.raw_json, r.source_type);
+    if (parsed) out.set(r.transaction_id, parsed);
+  }
+  return out;
+}
+
+export async function getTransactionsForDate(date: string): Promise<DrillDownTxn[]> {
+  // Defensive — only accept a real ISO YYYY-MM-DD to avoid any SQL surprises.
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return [];
+  const rows = db().all<{
+    id: number;
+    txn_date: string;
+    txn_time: string | null;
+    counterparty: string | null;
+    narration: string | null;
+    counterparty_kind: string | null;
+    withdrawal: number | null;
+    deposit: number | null;
+    category: string | null;
+    bank: string;
+    type: string;
+    last4: string;
+  }>(sql`
+    SELECT t.id, t.txn_date, t.txn_time, t.counterparty, t.narration,
+           t.counterparty_kind, t.withdrawal, t.deposit, t.category,
+           a.bank, a.type, a.last4
+    FROM transactions t
+    JOIN accounts a ON a.id = t.account_id
+    WHERE t.txn_date = ${date}
+    ORDER BY coalesce(t.txn_time, '00:00') ASC, t.id ASC
+  `);
+  const itemMap = getItemEnrichmentsForTxns(rows.map((r) => r.id));
+  return rows.map((r) => ({
+    id: r.id,
+    txnDate: r.txn_date,
+    txnTime: r.txn_time,
+    counterparty: r.counterparty,
+    narration: r.narration,
+    counterpartyKind: r.counterparty_kind,
+    withdrawal: r.withdrawal,
+    deposit: r.deposit,
+    category: r.category,
+    accountBank: r.bank,
+    accountType: r.type,
+    accountLast4: r.last4,
+    items: itemMap.get(r.id) ?? null,
+  }));
+}
+
+// ============================================================================
+// NEW: Top counterparties (clean PhonePe-style names, with kind badge)
+// ============================================================================
+
+export interface TopCounterparty {
+  counterparty: string;
+  counterpartyKind: string;
+  txnCount: number;
+  totalOut: number;
+  totalIn: number;
+  net: number;
+  firstSeen: string;
+  lastSeen: string;
+}
+
+export async function getTopCounterparties(limit = 30): Promise<TopCounterparty[]> {
+  const rows = db().all<{
+    counterparty: string;
+    kind: string | null;
+    n: number;
+    total_out: number | null;
+    total_in: number | null;
+    first: string;
+    last: string;
+  }>(sql`
+    SELECT
+      counterparty,
+      counterparty_kind AS kind,
+      count(*)                              AS n,
+      coalesce(sum(withdrawal), 0)          AS total_out,
+      coalesce(sum(deposit), 0)             AS total_in,
+      min(txn_date)                         AS first,
+      max(txn_date)                         AS last
+    FROM transactions
+    WHERE counterparty IS NOT NULL AND counterparty != ''
+    GROUP BY counterparty, counterparty_kind
+    ORDER BY (coalesce(sum(withdrawal), 0) + coalesce(sum(deposit), 0)) DESC
+    LIMIT ${limit}
+  `);
+  return rows.map((r) => ({
+    counterparty: r.counterparty,
+    counterpartyKind: r.kind ?? "unknown",
+    txnCount: r.n,
+    totalOut: Number(r.total_out ?? 0),
+    totalIn: Number(r.total_in ?? 0),
+    net: Number(r.total_in ?? 0) - Number(r.total_out ?? 0),
+    firstSeen: r.first,
+    lastSeen: r.last,
+  }));
+}
+
+// ============================================================================
+// NEW: Autopay link pairs (savings ↔ CC autopay payments)
+// ============================================================================
+
+export interface AutopayPair {
+  pairId: string;
+  txnDate: string;
+  amount: number;
+  fromAccount: string;
+  toAccount: string;
+}
+
+export async function getAutopayPairs(): Promise<AutopayPair[]> {
+  const rows = db().all<{
+    s_id: number;
+    c_id: number;
+    s_date: string;
+    s_amount: number;
+    s_last4: string;
+    c_last4: string;
+  }>(sql`
+    SELECT s.id AS s_id, c.id AS c_id, s.txn_date AS s_date,
+           s.withdrawal AS s_amount, sa.last4 AS s_last4, ca.last4 AS c_last4
+    FROM transactions s
+    JOIN transactions c ON c.id = s.linked_txn_id
+    JOIN accounts sa ON sa.id = s.account_id
+    JOIN accounts ca ON ca.id = c.account_id
+    WHERE sa.type = 'savings' AND ca.type = 'credit_card'
+    ORDER BY s.txn_date DESC
+  `);
+  return rows.map((r) => ({
+    pairId: `${r.s_id}-${r.c_id}`,
+    txnDate: r.s_date,
+    amount: Number(r.s_amount ?? 0),
+    fromAccount: `XX${r.s_last4}`,
+    toAccount: `XX${r.c_last4}`,
+  }));
+}
+
+// ============================================================================
+// NEW: Category tree (top-level group → subcategory → spend)
+// ============================================================================
+
+export interface CategoryTreeLeaf {
+  group: string;
+  subcategory: string;
+  totalOut: number;
+  txnCount: number;
+}
+
+export async function getCategoryTree(): Promise<CategoryTreeLeaf[]> {
+  const rows = db().all<{
+    category: string;
+    total_out: number | null;
+    n: number;
+  }>(sql`
+    SELECT category, coalesce(sum(withdrawal), 0) AS total_out, count(*) AS n
+    FROM transactions
+    WHERE category IS NOT NULL
+      AND category NOT LIKE 'Transfer:%'
+      AND category NOT LIKE 'Investment:%'
+      AND withdrawal IS NOT NULL
+    GROUP BY category
+    HAVING total_out > 0
+  `);
+  return rows.map((r) => {
+    const [group, sub] = r.category.split(":");
+    return {
+      group: group ?? r.category,
+      subcategory: sub ?? group ?? r.category,
+      totalOut: Number(r.total_out ?? 0),
+      txnCount: r.n,
+    };
+  });
 }

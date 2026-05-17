@@ -38,6 +38,14 @@ export interface Person {
    * — they're hand-curated, not user input.
    */
   upiPatterns: string[];
+  /**
+   * Case-insensitive display-name aliases matched against the cleaned
+   * `counterparty` field that PhonePe / GPay populate. Defaults to
+   * `[displayName]` when not provided (handled by `identifyPersonByName`).
+   * Use this when the same person shows up in PhonePe data by name but
+   * without a UPI handle that matches `upiPatterns`.
+   */
+  nameAliases?: string[];
   /** Optional human-readable aliases / known UPI handles, for documentation. */
   aliases?: string[];
   /** Free-form note for context. */
@@ -164,4 +172,57 @@ export function getPersonById(
   registry: Person[] = DEFAULT_PEOPLE,
 ): Person | undefined {
   return registry.find((p) => p.id === personId);
+}
+
+/**
+ * Identify the person from a clean counterparty NAME (as opposed to a bank
+ * narration with embedded UPI handles). Used for PhonePe / GPay rows where
+ * the source already gives us "Rahul Kumar" — no UPI handle to regex-match.
+ *
+ * Comparison is case-insensitive and matches on EITHER:
+ *   - exact equality with any `nameAliases` entry (or `displayName` when
+ *     nameAliases is omitted), OR
+ *   - whole-word substring (so "Rahul" matches "Rahul Kumar" but not
+ *     "Rahul Kapoor" if you've narrowed the alias to "Rahul Kumar").
+ *
+ * Returns null when nothing matches. UPI-handle matching via
+ * `identifyPerson` is the higher-confidence pass; the orchestrators call
+ * this fallback only when that returns null.
+ */
+export function identifyPersonByName(
+  counterparty: string,
+  registry: Person[] = DEFAULT_PEOPLE,
+): PersonMatch | null {
+  const name = counterparty.trim().toLowerCase();
+  if (!name) return null;
+  for (const person of registry) {
+    const aliases = person.nameAliases ?? [person.displayName];
+    for (const alias of aliases) {
+      const a = alias.trim().toLowerCase();
+      if (!a) continue;
+      // Exact case-insensitive match — the primary case for PhonePe.
+      if (name === a) {
+        return {
+          personId: person.id,
+          displayName: person.displayName,
+          matchedPattern: `name:${alias}`,
+        };
+      }
+      // Whole-word containment, e.g. "Rahul Kumar" inside "Rahul Kumar Singh".
+      // Word boundaries avoid "Rahul" inside "Mahirahuli" false-positives.
+      const re = new RegExp(`(^|\\s)${escapeRegex(a)}(\\s|$)`, "i");
+      if (re.test(name)) {
+        return {
+          personId: person.id,
+          displayName: person.displayName,
+          matchedPattern: `name:${alias}`,
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

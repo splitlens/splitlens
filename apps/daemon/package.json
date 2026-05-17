@@ -1,0 +1,37 @@
+{
+  "name": "@splitlens/daemon",
+  "version": "0.0.1",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "description": "Long-running file watcher that ingests new statements dropped into Documents/bank/inbox/. Managed by launchd on macOS.",
+  "type": "module",
+  "bin": {
+    "splitlens-daemon": "./src/main.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist .turbo",
+    "install-launchd": "bash launchd/install.sh",
+    "uninstall-launchd": "bash launchd/uninstall.sh"
+  },
+  "dependencies": {
+    "@splitlens/db": "workspace:*",
+    "@splitlens/email-receipts": "workspace:*",
+    "@splitlens/ingest": "workspace:*",
+    "@splitlens/ocr": "workspace:*",
+    "chokidar": "^4.0.3",
+    "drizzle-orm": "^0.38.4"
+  },
+  "devDependencies": {
+    "@splitlens/tsconfig": "workspace:*",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.22.0",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.9"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "name": "@splitlens/ocr",
+  "version": "0.0.1",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "description": "Local-first OCR pipeline for screenshot receipts (Blinkit, Zepto, Instamart). Uses macOS Vision framework via a bundled Swift helper — no cloud OCR.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "module": "./src/index.ts",
+  "types": "./src/index.ts",
+  "// resolution-order": "Mirrors @splitlens/core: consumers see TS source directly so workspace dev never picks up a stale dist/.",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./parsers": {
+      "types": "./src/parsers/index.ts",
+      "import": "./src/parsers/index.ts"
+    },
+    "./match": {
+      "types": "./src/match.ts",
+      "import": "./src/match.ts"
+    },
+    "./vision": {
+      "types": "./src/vision-ocr.ts",
+      "import": "./src/vision-ocr.ts"
+    }
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:swift": "mkdir -p bin && swiftc -O src/swift/ocr-helper.swift -o bin/splitlens-vision",
+    "dev": "tsc -p tsconfig.json --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist .turbo bin"
+  },
+  "devDependencies": {
+    "@splitlens/tsconfig": "workspace:*",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

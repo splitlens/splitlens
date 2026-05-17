@@ -1,0 +1,43 @@
+{
+  "name": "@splitlens/ingest",
+  "version": "0.0.1",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "description": "Node-side ingestion: takes a statement file, parses it with @splitlens/core, writes canonical rows into @splitlens/db. Used by the daemon and the splitlens-ingest CLI.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "module": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "bin": {
+    "splitlens-ingest": "./src/cli.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist .turbo",
+    "ingest": "tsx src/cli.ts"
+  },
+  "dependencies": {
+    "@splitlens/core": "workspace:*",
+    "@splitlens/db": "workspace:*",
+    "@splitlens/email-receipts": "workspace:*",
+    "drizzle-orm": "^0.38.4",
+    "pdfjs-dist": "^4.10.38"
+  },
+  "devDependencies": {
+    "@splitlens/tsconfig": "workspace:*",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.22.0",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.9"
+  }
+}

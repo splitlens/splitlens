@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { identifyPerson, DEFAULT_PEOPLE, getPersonById } from "../../src/people";
+import {
+  identifyPerson,
+  identifyPersonByName,
+  DEFAULT_PEOPLE,
+  getPersonById,
+  type Person,
+} from "../../src/people";
 
 describe("identifyPerson — DEFAULT_PEOPLE registry", () => {
   it("returns null for an unknown counterparty", () => {
@@ -124,5 +130,66 @@ describe("DEFAULT_PEOPLE registry shape", () => {
     for (const p of DEFAULT_PEOPLE) {
       expect(p.upiPatterns.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("identifyPersonByName — clean-name fallback (PhonePe / GPay)", () => {
+  it("matches the exact display name (case-insensitive)", () => {
+    expect(identifyPersonByName("Rahul Kumar")?.personId).toBe("rahul");
+    expect(identifyPersonByName("RAHUL KUMAR")?.personId).toBe("rahul");
+    expect(identifyPersonByName("rahul kumar")?.personId).toBe("rahul");
+  });
+
+  it("returns null for a counterparty no one in the registry matches", () => {
+    expect(identifyPersonByName("KRISHNA BEKARY")).toBeNull();
+    expect(identifyPersonByName("Apple Media Services")).toBeNull();
+  });
+
+  it("returns null for empty / whitespace input", () => {
+    expect(identifyPersonByName("")).toBeNull();
+    expect(identifyPersonByName("   ")).toBeNull();
+  });
+
+  it("matches on a nameAliases entry instead of displayName when provided", () => {
+    const reg: Person[] = [
+      {
+        id: "max",
+        displayName: "Maximus Q",
+        relationship: "friend",
+        upiPatterns: ["MAX-PAY@HDFC"],
+        nameAliases: ["Maximus", "Max"],
+      },
+    ];
+    expect(identifyPersonByName("Maximus", reg)?.personId).toBe("max");
+    expect(identifyPersonByName("Max", reg)?.personId).toBe("max");
+    // 'Maximus Q' contains the alias 'Maximus' as a whole word — still matches.
+    expect(identifyPersonByName("Maximus Q", reg)?.personId).toBe("max");
+    // Different name entirely doesn't match.
+    expect(identifyPersonByName("Maxine", reg)).toBeNull();
+  });
+
+  it("matches whole-word containment for multi-word names", () => {
+    const reg: Person[] = [
+      {
+        id: "rahul-k",
+        displayName: "Rahul Kumar",
+        relationship: "friend",
+        upiPatterns: ["RAHUL-X@OK"],
+      },
+    ];
+    // "Rahul Kumar Singh" contains "Rahul Kumar" as a whole-word match.
+    expect(identifyPersonByName("Rahul Kumar Singh", reg)?.personId).toBe("rahul-k");
+  });
+
+  it("does NOT match a partial substring that crosses word boundaries", () => {
+    const reg: Person[] = [
+      {
+        id: "rahul-k",
+        displayName: "Rahul Kumar",
+        relationship: "friend",
+        upiPatterns: ["RAHUL-X@OK"],
+      },
+    ];
+    expect(identifyPersonByName("Mahirahul Kumarwala", reg)).toBeNull();
   });
 });
