@@ -37,6 +37,16 @@ import {
 import { FilterRow, Scrubber, SearchBar } from "./ReviewLayout";
 import { SplitTxnModal } from "./SplitTxnModal";
 
+/** How the queue rows in each section are arranged.
+ *   "txn"       → flat list, one row per transaction (default)
+ *   "merchant"  → collapse rows that share a counterparty
+ *   "category"  → collapse rows that share a category
+ *
+ * Mirrors the /review/category "By date / By merchant" segment with
+ * an extra option, since the split queue's "Other un-reviewed"
+ * section commonly repeats both. */
+type GroupMode = "txn" | "merchant" | "category";
+
 interface Props {
   filter: ReviewListFilter;
   allRows: ClientReviewRow[];
@@ -74,6 +84,26 @@ export function SplitQueueClient({
   // every txn in the active filter is already done and the user
   // wants to verify or edit existing splits.
   const [showAll, setShowAll] = useState(false);
+
+  // Grouping mode. Mirrors the /review/category "By date / By merchant"
+  // toggle but with a third option, "By category", since the split
+  // queue's "Other un-reviewed" section tends to repeat merchants and
+  // categories that benefit from aggregation. Default: by txn (flat
+  // list), the original behavior.
+  const [groupMode, setGroupMode] = useState<GroupMode>("txn");
+
+  // Which group keys are currently expanded (each section's groups
+  // are keyed by `${sectionId}:${groupName}`). Closed by default —
+  // user opens to see child rows.
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
+  const toggleGroup = useCallback((key: string) => {
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
 
   const filteredRows = useMemo(
     () => applyClientFilter(allRows, filter),
@@ -392,6 +422,49 @@ export function SplitQueueClient({
           day to narrow to that single day. */}
       <Scrubber buckets={buckets} filter={filter} onPick={setFilter} />
 
+      {/* Group-mode toggle. Same idea as /review/category's by-date /
+          by-merchant, with an extra "by category" since the split
+          queue's Other section tends to repeat both. */}
+      <div
+        role="tablist"
+        aria-label="Group queue rows by"
+        className="flex items-center gap-1"
+        style={{ padding: "12px 40px 0" }}
+      >
+        {[
+          { id: "txn" as const, label: "By txn", hint: "Each row individually" },
+          {
+            id: "merchant" as const,
+            label: "By merchant",
+            hint: "Collapse repeats per counterparty",
+          },
+          {
+            id: "category" as const,
+            label: "By category",
+            hint: "Collapse repeats per category",
+          },
+        ].map((o) => {
+          const active = o.id === groupMode;
+          return (
+            <button
+              key={o.id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              title={o.hint}
+              onClick={() => {
+                setGroupMode(o.id);
+                setOpenGroups(new Set());
+              }}
+              className={`btn btn-sm ${active ? "" : "ghost"}`}
+              style={{ fontSize: 12, padding: "4px 10px" }}
+            >
+              {o.label}
+            </button>
+          );
+        })}
+      </div>
+
       {/* Queue sections */}
       <div
         style={{
@@ -453,9 +526,14 @@ export function SplitQueueClient({
             count={personRows.length}
             tone="primary"
           >
-            {personRows.map((r) => (
-              <Row key={r.id} row={r} onOpen={() => setActiveId(r.id)} />
-            ))}
+            <QueueBody
+              rows={personRows}
+              sectionId="person"
+              groupMode={groupMode}
+              openGroups={openGroups}
+              onToggleGroup={toggleGroup}
+              onOpenRow={(id) => setActiveId(id)}
+            />
           </Section>
         )}
         {recurringRows.length > 0 && (
@@ -465,9 +543,14 @@ export function SplitQueueClient({
             count={recurringRows.length}
             tone="accent"
           >
-            {recurringRows.map((r) => (
-              <Row key={r.id} row={r} onOpen={() => setActiveId(r.id)} />
-            ))}
+            <QueueBody
+              rows={recurringRows}
+              sectionId="recurring"
+              groupMode={groupMode}
+              openGroups={openGroups}
+              onToggleGroup={toggleGroup}
+              onOpenRow={(id) => setActiveId(id)}
+            />
           </Section>
         )}
         {largeRows.length > 0 && (
@@ -485,9 +568,14 @@ export function SplitQueueClient({
             count={largeRows.length}
             tone="warn"
           >
-            {largeRows.map((r) => (
-              <Row key={r.id} row={r} onOpen={() => setActiveId(r.id)} />
-            ))}
+            <QueueBody
+              rows={largeRows}
+              sectionId="other"
+              groupMode={groupMode}
+              openGroups={openGroups}
+              onToggleGroup={toggleGroup}
+              onOpenRow={(id) => setActiveId(id)}
+            />
           </Section>
         )}
       </div>
@@ -721,4 +809,244 @@ function fmtDayMonth(iso: string): string {
     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
   ];
   return `${d} ${months[m - 1]} ’${String(y).slice(2)}`;
+}
+
+/**
+ * Renders the body of a queue section. Switches on groupMode:
+ *   "txn"       — flat list (one Row per txn)
+ *   "merchant"  — group rows by counterparty; each group collapses
+ *   "category"  — group rows by category; each group collapses
+ *
+ * Groups are sorted by total absolute amount desc so the biggest
+ * batches surface first. Within a group, children sort by date desc
+ * (already the case from the parent's section sort).
+ */
+function QueueBody({
+  rows,
+  sectionId,
+  groupMode,
+  openGroups,
+  onToggleGroup,
+  onOpenRow,
+}: {
+  rows: SplitQueueRow[];
+  sectionId: string;
+  groupMode: GroupMode;
+  openGroups: Set<string>;
+  onToggleGroup: (key: string) => void;
+  onOpenRow: (id: number) => void;
+}) {
+  if (groupMode === "txn") {
+    return (
+      <>
+        {rows.map((r) => (
+          <Row key={r.id} row={r} onOpen={() => onOpenRow(r.id)} />
+        ))}
+      </>
+    );
+  }
+
+  // Group by merchant or category. Anonymous / missing keys land
+  // under "(unknown)" so they aren't silently dropped.
+  const keyFn = (r: SplitQueueRow): string =>
+    groupMode === "merchant"
+      ? r.counterparty || "(unknown)"
+      : r.category ?? "Uncategorized";
+
+  const groups = new Map<string, SplitQueueRow[]>();
+  for (const r of rows) {
+    const k = keyFn(r);
+    const arr = groups.get(k) ?? [];
+    arr.push(r);
+    groups.set(k, arr);
+  }
+  const sorted = Array.from(groups.entries())
+    .map(([name, rs]) => ({
+      name,
+      rows: rs,
+      total: rs.reduce((s, r) => s + r.amount, 0),
+    }))
+    .sort((a, b) => b.total - a.total);
+
+  return (
+    <>
+      {sorted.map((g) => {
+        const groupId = `${sectionId}:${g.name}`;
+        const isOpen = openGroups.has(groupId);
+        return (
+          <div key={groupId}>
+            <GroupRow
+              name={g.name}
+              rows={g.rows}
+              total={g.total}
+              isOpen={isOpen}
+              onToggle={() => onToggleGroup(groupId)}
+            />
+            {isOpen && (
+              <div
+                style={{
+                  paddingLeft: 28,
+                  borderLeft: "1px solid var(--border)",
+                  marginLeft: 14,
+                }}
+              >
+                {g.rows.map((r) => (
+                  <Row
+                    key={r.id}
+                    row={r}
+                    onOpen={() => onOpenRow(r.id)}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+/**
+ * Aggregated group row — collapsible.
+ *
+ * Layout mirrors the flat Row (chevron, name+meta, suggested-split
+ * badge, amount) so the user's eye doesn't have to re-anchor when
+ * switching grouping modes. The right-side badge prefers the
+ * "✨ split N-way" suggestion if every child shares the same target;
+ * otherwise it shows the txn count and a "choose split" hint.
+ */
+function GroupRow({
+  name,
+  rows,
+  total,
+  isOpen,
+  onToggle,
+}: {
+  name: string;
+  rows: SplitQueueRow[];
+  total: number;
+  isOpen: boolean;
+  onToggle: () => void;
+}) {
+  // If every child suggests the same person, surface that as the
+  // group-level suggestion. Otherwise leave it null — the user has
+  // to expand to decide each one.
+  const suggested = useMemo(() => {
+    const first = rows[0]?.suggestedSplitWith ?? null;
+    if (!first) return null;
+    return rows.every((r) => r.suggestedSplitWith === first) ? first : null;
+  }, [rows]);
+
+  const oldest = rows[rows.length - 1]?.txnDate;
+  const newest = rows[0]?.txnDate;
+  const dateRange =
+    oldest && newest && oldest !== newest
+      ? `${fmtDayMonth(oldest)} → ${fmtDayMonth(newest)}`
+      : newest
+        ? fmtDayMonth(newest)
+        : "";
+
+  const avg = rows.length > 0 ? total / rows.length : 0;
+
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={isOpen}
+      style={{
+        display: "grid",
+        gridTemplateColumns: "20px 1fr auto auto",
+        gap: 14,
+        alignItems: "center",
+        padding: "12px 10px",
+        background: isOpen
+          ? "color-mix(in srgb, var(--fg) 3%, transparent)"
+          : "transparent",
+        border: "1px solid transparent",
+        borderTop: "1px dashed var(--border-dashed)",
+        borderRadius: 8,
+        cursor: "pointer",
+        textAlign: "left",
+        color: "inherit",
+        fontFamily: "inherit",
+        width: "100%",
+        transition:
+          "background 140ms var(--ease-out), border-color 140ms var(--ease-out)",
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "var(--muted-2)",
+        }}
+      >
+        <Ico name={isOpen ? "chevron-down" : "chevron-right"} size={13} />
+      </span>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 3,
+          minWidth: 0,
+        }}
+      >
+        <span
+          style={{
+            fontSize: 14,
+            color: "var(--fg)",
+            fontWeight: 500,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {name}
+        </span>
+        <span
+          className="tiny"
+          style={{ color: "var(--muted-2)" }}
+        >
+          {rows.length} txn{rows.length === 1 ? "" : "s"}
+          {avg > 0 && (
+            <span style={{ marginLeft: 8 }}>· avg {fmtInr(Math.round(avg))}</span>
+          )}
+          {dateRange && (
+            <span style={{ marginLeft: 8 }}>· {dateRange}</span>
+          )}
+        </span>
+      </div>
+      <div style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+        {suggested ? (
+          <span
+            style={{
+              fontSize: 11.5,
+              color: "var(--accent)",
+              padding: "2px 8px",
+              border: "1px solid var(--accent-line)",
+              borderRadius: 999,
+              background: "var(--accent-soft)",
+            }}
+          >
+            ✨ split 2-way with {suggested}
+          </span>
+        ) : (
+          <span className="tiny muted">expand to choose</span>
+        )}
+      </div>
+      <span
+        className="num-amount"
+        style={{
+          fontSize: 14,
+          color: "var(--debit)",
+          minWidth: 90,
+          textAlign: "right",
+        }}
+      >
+        −{fmtInr(total)}
+      </span>
+    </button>
+  );
 }
