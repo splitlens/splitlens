@@ -1736,47 +1736,162 @@ export async function getMerchantListAggregates(
 }
 
 /**
- * Apply every saved merchant_category_rules row to any newly-arrived
- * un-reviewed transactions whose counterparty matches. Called from the
- * /review page loader so the user's previously-set rules keep working
- * across statement ingestions — they don't have to re-toggle the bulk
- * apply each month for the same recurring merchant.
+ * Apply every saved per-merchant rule (category + recurrence + share)
+ * to any newly-arrived un-reviewed transactions whose counterparty
+ * matches. Called from the /review page loader so the user's
+ * previously-set rules keep working across statement ingestions —
+ * they don't have to re-toggle the bulk apply each month for the same
+ * recurring merchant.
  *
- * Idempotent: only updates rows that don't already have the rule's
- * category applied. Reviewed=1 rows are left alone — those are user-
- * confirmed and trump any rule.
- *
- * Cheap: one indexed UPDATE per call. Skips entirely when no rules
- * exist (zero-row JOIN, ~microseconds).
+ * Three independent UPDATEs, one per rule table. Each is idempotent:
+ * only updates rows that don't already match the rule's value.
+ * Reviewed=1 rows are left alone — those are user-confirmed and trump
+ * any rule. Cheap when no rules exist (zero-row joins, ~microseconds).
  */
 export async function sweepPendingMerchantRules(): Promise<{
   swept: number;
 }> {
-  const result = db().run(sql`
-    UPDATE transactions
-    SET category = (
-          SELECT category FROM merchant_category_rules r
-          WHERE r.counterparty = transactions.counterparty
-        ),
-        category_rule = 'merchant',
-        updated_at = CURRENT_TIMESTAMP
-    WHERE transactions.counterparty IN (
-            SELECT counterparty FROM merchant_category_rules
+  let total = 0;
+  const tally = (result: unknown) => {
+    if (typeof (result as { changes?: number }).changes === "number") {
+      total += (result as { changes: number }).changes;
+    }
+  };
+
+  // Category: existing path, retained verbatim. Sets category +
+  // category_rule = 'merchant' so the ingestion-time merger knows the
+  // value came from a rule (not from a SmartSuggest accept).
+  tally(
+    db().run(sql`
+      UPDATE transactions
+      SET category = (
+            SELECT category FROM merchant_category_rules r
+            WHERE r.counterparty = transactions.counterparty
+          ),
+          category_rule = 'merchant',
+          updated_at = CURRENT_TIMESTAMP
+      WHERE transactions.counterparty IN (
+              SELECT counterparty FROM merchant_category_rules
+            )
+        AND transactions.reviewed = 0
+        AND (
+          transactions.category IS NULL
+          OR transactions.category != (
+            SELECT category FROM merchant_category_rules r
+            WHERE r.counterparty = transactions.counterparty
           )
-      AND transactions.reviewed = 0
-      AND (
-        transactions.category IS NULL
-        OR transactions.category != (
-          SELECT category FROM merchant_category_rules r
-          WHERE r.counterparty = transactions.counterparty
         )
-      )
+    `),
+  );
+
+  // Recurrence
+  tally(
+    db().run(sql`
+      UPDATE transactions
+      SET recurrence = (
+            SELECT recurrence FROM merchant_recurrence_rules r
+            WHERE r.counterparty = transactions.counterparty
+          ),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE transactions.counterparty IN (
+              SELECT counterparty FROM merchant_recurrence_rules
+            )
+        AND transactions.reviewed = 0
+        AND (
+          transactions.recurrence IS NULL
+          OR transactions.recurrence != (
+            SELECT recurrence FROM merchant_recurrence_rules r
+            WHERE r.counterparty = transactions.counterparty
+          )
+        )
+    `),
+  );
+
+  // Share
+  tally(
+    db().run(sql`
+      UPDATE transactions
+      SET shared_with = (
+            SELECT shared_with FROM merchant_share_rules r
+            WHERE r.counterparty = transactions.counterparty
+          ),
+          share_count = (
+            SELECT share_count FROM merchant_share_rules r
+            WHERE r.counterparty = transactions.counterparty
+          ),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE transactions.counterparty IN (
+              SELECT counterparty FROM merchant_share_rules
+            )
+        AND transactions.reviewed = 0
+        AND (
+          transactions.share_count != (
+            SELECT share_count FROM merchant_share_rules r
+            WHERE r.counterparty = transactions.counterparty
+          )
+          OR (
+            (transactions.shared_with IS NULL) !=
+            ((SELECT shared_with FROM merchant_share_rules r
+              WHERE r.counterparty = transactions.counterparty) IS NULL)
+          )
+          OR transactions.shared_with != (
+            SELECT shared_with FROM merchant_share_rules r
+            WHERE r.counterparty = transactions.counterparty
+          )
+        )
+    `),
+  );
+
+  return { swept: total };
+}
+
+/**
+ * Fetch the active rule state for a counterparty (all three
+ * dimensions). Drives the InboxModal's pre-fill of the bulk-apply
+ * toggle defaults so the UI reflects what's already set.
+ */
+export interface MerchantRuleState {
+  category: string | null;
+  recurrence: string | null;
+  sharedWith: string[] | null;
+  shareCount: number | null;
+}
+
+export async function getMerchantRuleState(
+  counterparty: string,
+): Promise<MerchantRuleState> {
+  const cp = counterparty.trim();
+  if (!cp)
+    return { category: null, recurrence: null, sharedWith: null, shareCount: null };
+
+  const cat = db().get<{ category: string }>(sql`
+    SELECT category FROM merchant_category_rules WHERE counterparty = ${cp}
   `);
-  const changes =
-    typeof (result as { changes?: number }).changes === "number"
-      ? (result as { changes: number }).changes
-      : 0;
-  return { swept: changes };
+  const rec = db().get<{ recurrence: string }>(sql`
+    SELECT recurrence FROM merchant_recurrence_rules WHERE counterparty = ${cp}
+  `);
+  const shr = db().get<{ shared_with: string | null; share_count: number }>(sql`
+    SELECT shared_with, share_count FROM merchant_share_rules
+    WHERE counterparty = ${cp}
+  `);
+
+  let parsedShared: string[] | null = null;
+  if (shr?.shared_with) {
+    try {
+      const parsed = JSON.parse(shr.shared_with);
+      if (Array.isArray(parsed)) parsedShared = parsed.map(String);
+    } catch {
+      // Malformed JSON in shared_with — treat as no list.
+      parsedShared = null;
+    }
+  }
+
+  return {
+    category: cat?.category ?? null,
+    recurrence: rec?.recurrence ?? null,
+    sharedWith: parsedShared,
+    shareCount: shr?.share_count ?? null,
+  };
 }
 
 /** 1–2 char avatar text. Persons use first letters of words; businesses use the leading char. */

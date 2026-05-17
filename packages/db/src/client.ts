@@ -240,6 +240,29 @@ CREATE TABLE IF NOT EXISTS merchant_category_rules (
   updated_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Per-merchant recurrence rule — "Rahul Kumar transfers are monthly".
+-- Same pattern as merchant_category_rules: PK is the counterparty so
+-- each merchant has one rule; bulk-apply + future ingestion sweep
+-- mirror the category path.
+CREATE TABLE IF NOT EXISTS merchant_recurrence_rules (
+  counterparty  TEXT PRIMARY KEY,
+  recurrence    TEXT NOT NULL,
+  created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Per-merchant share-with rule — "always split Rahul Kumar txns with
+-- Anjali". The shared_with column is the JSON-encoded array of person
+-- IDs (same shape as transactions.shared_with). share_count is the
+-- total split divisor including me — 2 = me + 1 other.
+CREATE TABLE IF NOT EXISTS merchant_share_rules (
+  counterparty  TEXT PRIMARY KEY,
+  shared_with   TEXT,
+  share_count   INTEGER NOT NULL DEFAULT 1,
+  created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Google Maps Timeline ingestion. One row per Takeout import. SHA-256 of
 -- the source bytes is the idempotency key; re-uploading the same export
 -- returns the existing row without writing anything new.

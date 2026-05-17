@@ -46,6 +46,7 @@ import {
   unmarkReviewed,
   saveMerchantLabel,
   applyMerchantCategoryRule,
+  applyMerchantRule,
   countOtherUnreviewedForMerchant,
   type TransactionEdits,
 } from "@/app/review/actions";
@@ -326,12 +327,16 @@ function InboxBody({
   const [attachOpen, setAttachOpen] = useState(false);
   const [addingCategory, setAddingCategory] = useState(false);
 
-  // Bulk-apply state. When the user picks a category for a txn whose
-  // counterparty has other un-reviewed siblings, we surface an "apply to
-  // all N other Shilpa V txns" toggle. Default ON — categorizing a
-  // recurring merchant once should lifetime-categorize it.
+  // Bulk-apply state. When the user changes ANY classification for a
+  // txn whose counterparty has other un-reviewed siblings, we surface
+  // an "apply to N other X txns" panel with one checkbox per dimension
+  // (category / recurrence / share). Each defaults ON whenever its
+  // value differs from the original — i.e. the user actually changed
+  // it, so they're likely to want it propagated.
   const [otherUnreviewedCount, setOtherUnreviewedCount] = useState<number>(0);
-  const [applyToAll, setApplyToAll] = useState<boolean>(true);
+  const [applyCategoryToAll, setApplyCategoryToAll] = useState<boolean>(true);
+  const [applyRecurrenceToAll, setApplyRecurrenceToAll] = useState<boolean>(true);
+  const [applyShareToAll, setApplyShareToAll] = useState<boolean>(true);
 
   // Fetch the count of other un-reviewed txns for this merchant on mount
   // / when the txn changes. Cheap query (counterparty index hits), runs
@@ -404,24 +409,41 @@ function InboxBody({
         return;
       }
 
-      // If the user changed the category AND opted to apply it to all
-      // other un-reviewed siblings for this merchant, run the bulk-apply
-      // + persist the rule. The single-txn save above already wrote this
-      // row's category; this call handles the rest of the cohort and
-      // adds the rule for future ingestion. We fire-and-await so any
-      // bulk-update errors surface alongside the regular save errors.
-      const categoryChanged = form.category !== original.category;
+      // If the user changed any classification AND opted to apply it
+      // to all other un-reviewed siblings for this merchant, run the
+      // multi-dimensional bulk-apply + persist the matching rules.
+      // The single-txn save above already wrote this row's values;
+      // this call handles the rest of the cohort and adds the rules
+      // for future ingestion. Three checkboxes (category / recurrence
+      // / share) are evaluated independently and bundled into one
+      // applyMerchantRule call so SQL writes happen in one round-trip.
       const counterparty = form.counterparty.trim();
-      if (
-        applyToAll &&
-        categoryChanged &&
+      const categoryChanged = form.category !== original.category;
+      const recurrenceChanged = form.recurrence !== original.recurrence;
+      const shareChanged =
+        !sameStringArray(form.sharedWith, original.sharedWith) ||
+        form.shareCount !== original.shareCount;
+      const wantsBulk =
         counterparty &&
-        otherUnreviewedCount > 0
-      ) {
-        const bulk = await applyMerchantCategoryRule(
-          counterparty,
-          form.category.trim() || null,
-        );
+        otherUnreviewedCount > 0 &&
+        ((applyCategoryToAll && categoryChanged) ||
+          (applyRecurrenceToAll && recurrenceChanged) ||
+          (applyShareToAll && shareChanged));
+      if (wantsBulk) {
+        const bulk = await applyMerchantRule(counterparty, {
+          ...(applyCategoryToAll && categoryChanged
+            ? { category: form.category.trim() || null }
+            : {}),
+          ...(applyRecurrenceToAll && recurrenceChanged
+            ? { recurrence: form.recurrence }
+            : {}),
+          ...(applyShareToAll && shareChanged
+            ? {
+                sharedWith: form.sharedWith,
+                shareCount: form.shareCount,
+              }
+            : {}),
+        });
         if (!bulk.ok) {
           setSaving(false);
           setErrMsg(`Saved this txn, but rule failed: ${bulk.error}`);
@@ -440,8 +462,16 @@ function InboxBody({
       txn.id,
       form.category,
       form.counterparty,
+      form.recurrence,
+      form.sharedWith,
+      form.shareCount,
       original.category,
-      applyToAll,
+      original.recurrence,
+      original.sharedWith,
+      original.shareCount,
+      applyCategoryToAll,
+      applyRecurrenceToAll,
+      applyShareToAll,
       otherUnreviewedCount,
     ],
   );
@@ -860,106 +890,10 @@ function InboxBody({
             )}
           </AnimatePresence>
 
-          {/* Bulk-apply offer — appears once the user has picked a
-              category that differs from the original AND there are
-              other un-reviewed txns for the same merchant to bulk-
-              update. Default ON because categorizing a recurring
-              merchant should be a lifetime decision, not a per-txn
-              one. The toggle persists the category as a rule for
-              future ingestion too. */}
-          <AnimatePresence initial={false}>
-            {form.counterparty.trim().length > 0 &&
-              form.category.trim().length > 0 &&
-              form.category !== original.category &&
-              otherUnreviewedCount > 0 && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: "auto" }}
-                  exit={{ opacity: 0, height: 0 }}
-                  transition={{
-                    duration: 0.22,
-                    ease: [0.22, 1, 0.36, 1],
-                  }}
-                  style={{ overflow: "hidden" }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setApplyToAll((v) => !v)}
-                    aria-pressed={applyToAll}
-                    style={{
-                      marginTop: 12,
-                      width: "100%",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 10,
-                      padding: "10px 12px",
-                      background: applyToAll
-                        ? "var(--accent-soft)"
-                        : "var(--surface-2)",
-                      border: `1px solid ${
-                        applyToAll
-                          ? "var(--accent-line)"
-                          : "var(--border)"
-                      }`,
-                      borderRadius: 8,
-                      color: "var(--fg)",
-                      fontFamily: "inherit",
-                      fontSize: 13,
-                      cursor: "pointer",
-                      textAlign: "left",
-                      transition:
-                        "background 180ms ease, border-color 180ms ease",
-                    }}
-                  >
-                    <span
-                      aria-hidden
-                      style={{
-                        width: 16,
-                        height: 16,
-                        borderRadius: 4,
-                        border: `1.5px solid ${
-                          applyToAll
-                            ? "var(--accent)"
-                            : "var(--border-strong)"
-                        }`,
-                        background: applyToAll
-                          ? "var(--accent)"
-                          : "transparent",
-                        display: "inline-flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        flexShrink: 0,
-                        color: "var(--accent-ink)",
-                      }}
-                    >
-                      {applyToAll && <Ico name="check" size={11} />}
-                    </span>
-                    <span style={{ flex: 1, minWidth: 0 }}>
-                      Always categorize{" "}
-                      <b style={{ fontWeight: 500 }}>
-                        “{form.counterparty.trim()}”
-                      </b>{" "}
-                      as{" "}
-                      <b style={{ fontWeight: 500 }}>
-                        {activeCatDef.label}
-                      </b>{" "}
-                      — applies to{" "}
-                      <b style={{ fontWeight: 500 }}>
-                        {otherUnreviewedCount.toLocaleString()} other
-                        un-reviewed
-                      </b>{" "}
-                      txn{otherUnreviewedCount === 1 ? "" : "s"} and
-                      every future one
-                    </span>
-                    <Ico
-                      name="sparkles"
-                      size={13}
-                      className="accent"
-                    />
-                  </button>
-                </motion.div>
-              )}
-          </AnimatePresence>
+          {/* Bulk-apply panel now lives after the Whose / How often
+              section so it can offer all three rule dimensions
+              (category + recurrence + share) at the moment the user
+              has finished classifying. See <BulkRulePanel> below. */}
         </div>
 
         {/* ─── Whose / How often segmented controls ───────────────── */}
@@ -1000,6 +934,47 @@ function InboxBody({
             )}
           </div>
         </div>
+
+        {/* ─── Bulk-apply panel — appears once any classification
+             differs from the original AND other un-reviewed siblings
+             exist. Three checkboxes (category / recurrence / share)
+             let the user pick which dimensions to propagate; each
+             defaults ON when its underlying value changed. Saves
+             persist a per-merchant rule so future statement ingests
+             pick up the same classification automatically. */}
+        <BulkRulePanel
+          counterparty={form.counterparty.trim()}
+          otherUnreviewedCount={otherUnreviewedCount}
+          categoryChanged={form.category !== original.category}
+          recurrenceChanged={form.recurrence !== original.recurrence}
+          shareChanged={
+            !sameStringArray(form.sharedWith, original.sharedWith) ||
+            form.shareCount !== original.shareCount
+          }
+          categoryLabel={activeCatDef.label}
+          recurrenceLabel={
+            recDef
+              ? recDef.label
+              : form.recurrence
+                ? form.recurrence
+                : "one-time"
+          }
+          shareLabel={
+            form.shareCount > 1
+              ? `split ${form.shareCount}-way${
+                  form.sharedWith.length > 0
+                    ? ` with ${form.sharedWith.join(", ")}`
+                    : ""
+                }`
+              : "just me"
+          }
+          applyCategory={applyCategoryToAll}
+          applyRecurrence={applyRecurrenceToAll}
+          applyShare={applyShareToAll}
+          onToggleCategory={() => setApplyCategoryToAll((v) => !v)}
+          onToggleRecurrence={() => setApplyRecurrenceToAll((v) => !v)}
+          onToggleShare={() => setApplyShareToAll((v) => !v)}
+        />
 
         {/* ─── Notes (collapsible) ────────────────────────────────── */}
         <details
@@ -1108,6 +1083,193 @@ function InboxBody({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Banner that surfaces a "lifetime rule" offer to the user after they
+ * change any of the three classification dimensions in the InboxModal.
+ *
+ * Each row is a small checkbox-button row stating
+ *
+ *   "Always {verb} {merchant} as {value} — applies to N others and
+ *    every future one"
+ *
+ * Only rows whose dimension actually changed render; if nothing
+ * changed or there are no other un-reviewed siblings, the whole panel
+ * stays hidden (no banner, no padding cost).
+ *
+ * The checkboxes default to checked (controlled by the parent). A
+ * single click on a row toggles only that dimension. The actual
+ * server save is bundled into the regular Mark-reviewed flow.
+ */
+function BulkRulePanel({
+  counterparty,
+  otherUnreviewedCount,
+  categoryChanged,
+  recurrenceChanged,
+  shareChanged,
+  categoryLabel,
+  recurrenceLabel,
+  shareLabel,
+  applyCategory,
+  applyRecurrence,
+  applyShare,
+  onToggleCategory,
+  onToggleRecurrence,
+  onToggleShare,
+}: {
+  counterparty: string;
+  otherUnreviewedCount: number;
+  categoryChanged: boolean;
+  recurrenceChanged: boolean;
+  shareChanged: boolean;
+  categoryLabel: string;
+  recurrenceLabel: string;
+  shareLabel: string;
+  applyCategory: boolean;
+  applyRecurrence: boolean;
+  applyShare: boolean;
+  onToggleCategory: () => void;
+  onToggleRecurrence: () => void;
+  onToggleShare: () => void;
+}) {
+  // Bail early when there's nothing to offer — keeps the whole banner
+  // out of the DOM (no animation, no padding) until the user has made
+  // a change worth propagating.
+  const anyChanged = categoryChanged || recurrenceChanged || shareChanged;
+  if (
+    !counterparty ||
+    otherUnreviewedCount <= 0 ||
+    !anyChanged
+  ) {
+    return null;
+  }
+
+  const Row = ({
+    verb,
+    value,
+    on,
+    onToggle,
+  }: {
+    verb: string;
+    value: string;
+    on: boolean;
+    onToggle: () => void;
+  }) => (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={on}
+      style={{
+        width: "100%",
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "8px 10px",
+        background: on ? "var(--accent-soft)" : "transparent",
+        border: `1px solid ${on ? "var(--accent-line)" : "var(--border)"}`,
+        borderRadius: 7,
+        color: "var(--fg)",
+        fontFamily: "inherit",
+        fontSize: 13,
+        cursor: "pointer",
+        textAlign: "left",
+        transition:
+          "background 180ms ease, border-color 180ms ease",
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          width: 15,
+          height: 15,
+          borderRadius: 4,
+          border: `1.5px solid ${on ? "var(--accent)" : "var(--border-strong)"}`,
+          background: on ? "var(--accent)" : "transparent",
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexShrink: 0,
+          color: "var(--accent-ink)",
+        }}
+      >
+        {on && <Ico name="check" size={10} />}
+      </span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        Always {verb}{" "}
+        <b style={{ fontWeight: 500 }}>“{counterparty}”</b> as{" "}
+        <b style={{ fontWeight: 500 }}>{value}</b>
+      </span>
+    </button>
+  );
+
+  return (
+    <div
+      style={{
+        margin: "0 24px 18px",
+        padding: 12,
+        background:
+          "linear-gradient(180deg, var(--accent-soft), transparent 70%)",
+        border: "1px solid var(--accent-line)",
+        borderRadius: 10,
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          marginBottom: 2,
+        }}
+      >
+        <Ico name="sparkles" size={13} className="accent" />
+        <span
+          className="eyebrow"
+          style={{ color: "var(--accent)", margin: 0 }}
+        >
+          Save this as a rule
+        </span>
+        <span
+          style={{
+            marginLeft: "auto",
+            fontSize: 11.5,
+            color: "var(--muted)",
+          }}
+        >
+          {otherUnreviewedCount.toLocaleString()} other un-reviewed
+          {otherUnreviewedCount === 1 ? " txn" : " txns"} · every
+          future one too
+        </span>
+      </div>
+      {categoryChanged && (
+        <Row
+          verb="categorize"
+          value={categoryLabel}
+          on={applyCategory}
+          onToggle={onToggleCategory}
+        />
+      )}
+      {recurrenceChanged && (
+        <Row
+          verb="mark"
+          value={recurrenceLabel}
+          on={applyRecurrence}
+          onToggle={onToggleRecurrence}
+        />
+      )}
+      {shareChanged && (
+        <Row
+          verb="split"
+          value={shareLabel}
+          on={applyShare}
+          onToggle={onToggleShare}
+        />
+      )}
     </div>
   );
 }

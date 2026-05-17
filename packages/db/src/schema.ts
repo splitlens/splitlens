@@ -225,6 +225,42 @@ export const merchantCategoryRules = sqliteTable(
   },
 );
 
+/**
+ * Per-merchant recurrence rule. Mirrors `merchantCategoryRules` but for
+ * the recurrence dimension: "always treat Spotify charges as monthly",
+ * "BESCOM is quarterly". Drives the sweep on /review load so newly-
+ * ingested rows pick up the cadence without the user having to retag.
+ */
+export const merchantRecurrenceRules = sqliteTable(
+  "merchant_recurrence_rules",
+  {
+    counterparty: text("counterparty").primaryKey(),
+    /** App-enforced enum: 'one_time' | 'monthly' | 'weekly' | 'quarterly' | 'yearly'. */
+    recurrence: text("recurrence").notNull(),
+    createdAt: isoTimestamp("created_at"),
+    updatedAt: isoTimestamp("updated_at"),
+  },
+);
+
+/**
+ * Per-merchant share-with rule. "Always split Rahul Kumar txns with
+ * Anjali" — shared_with stores the CSV/JSON-encoded list of person
+ * IDs (same shape as transactions.shared_with); share_count is the
+ * total split divisor including me (2 = me + 1 other).
+ */
+export const merchantShareRules = sqliteTable(
+  "merchant_share_rules",
+  {
+    counterparty: text("counterparty").primaryKey(),
+    /** JSON-encoded text array of person IDs. NULL = no shared list set. */
+    sharedWith: text("shared_with"),
+    /** Total split divisor including me. 1 = just me. */
+    shareCount: integer("share_count").notNull().default(1),
+    createdAt: isoTimestamp("created_at"),
+    updatedAt: isoTimestamp("updated_at"),
+  },
+);
+
 export const merchantLabels = sqliteTable(
   "merchant_labels",
   {

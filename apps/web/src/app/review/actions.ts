@@ -1141,3 +1141,171 @@ export async function countOtherUnreviewedForMerchant(
   `);
   return row?.n ?? 0;
 }
+
+// ----------------------------------------------------------------------------
+// Three-dimensional per-merchant rules (category + recurrence + share)
+// ----------------------------------------------------------------------------
+
+/**
+ * A merchant rule patch — any subset of the three classification
+ * dimensions a user might want to bind to a counterparty. Each
+ * dimension is independently optional. Passing `undefined` for a key
+ * means "leave any existing rule for this dimension alone"; passing
+ * `null` means "clear the rule for this dimension".
+ */
+export interface MerchantRulePatch {
+  category?: string | null;
+  recurrence?:
+    | "one_time"
+    | "monthly"
+    | "weekly"
+    | "quarterly"
+    | "yearly"
+    | null;
+  /** Person IDs to share with, excluding "me". Pass `null` to clear. */
+  sharedWith?: string[] | null;
+  /** Total split divisor (1 = just me). Omit to derive from sharedWith.length+1. */
+  shareCount?: number | null;
+}
+
+/**
+ * Apply a multi-dimensional rule for a single counterparty AND bulk-
+ * update every un-reviewed sibling txn to match. This is the
+ * generalized version of applyMerchantCategoryRule — same semantics
+ * but the user can now bind any of category / recurrence / share in
+ * one shot.
+ *
+ * Workflow per dimension:
+ *   - Patch key absent (undefined): no-op for that dimension.
+ *   - Patch key === null:
+ *       · Delete any existing rule row for that dimension.
+ *       · Do NOT clear the field on existing txns — clearing a rule
+ *         means "stop enforcing", not "reset everything that was ever
+ *         set". User-confirmed values (reviewed=1) are untouched
+ *         anyway; un-reviewed values stay whatever the previous rule
+ *         set them to.
+ *   - Patch key with a value:
+ *       · UPSERT the rule row.
+ *       · UPDATE all un-reviewed txns for this counterparty to match.
+ *
+ * Returns the count of distinct rows affected so the UI can show "N
+ * txns updated" feedback. Same row touched by multiple dimensions
+ * counts once (we DISTINCT on id at the end).
+ */
+export async function applyMerchantRule(
+  counterparty: string,
+  patch: MerchantRulePatch,
+): Promise<{ ok: true; rowsUpdated: number } | { ok: false; error: string }> {
+  const cp = counterparty.trim();
+  if (!cp) return { ok: false, error: "counterparty required" };
+
+  const db = openDb();
+  const touched = new Set<number>();
+
+  // Helper that runs an UPDATE + records the affected ids.
+  const recordUpdated = (
+    where: ReturnType<typeof sql>,
+    setFragments: ReturnType<typeof sql>[],
+  ) => {
+    if (setFragments.length === 0) return;
+    setFragments.push(sql`updated_at = CURRENT_TIMESTAMP`);
+    // We use a two-step approach to capture which rows were changed
+    // (better-sqlite3's .changes is total count, not row IDs). Cheap
+    // on a single counterparty's slice.
+    const candidates = db.all<{ id: number }>(sql`
+      SELECT id FROM transactions
+      WHERE counterparty = ${cp} AND reviewed = 0 AND (${where})
+    `);
+    if (candidates.length === 0) return;
+    db.run(sql`
+      UPDATE transactions
+      SET ${sql.join(setFragments, sql`, `)}
+      WHERE counterparty = ${cp} AND reviewed = 0 AND (${where})
+    `);
+    for (const r of candidates) touched.add(r.id);
+  };
+
+  // --- Category ---
+  if (patch.category !== undefined) {
+    if (patch.category === null || patch.category.trim() === "") {
+      db.run(sql`DELETE FROM merchant_category_rules WHERE counterparty = ${cp}`);
+    } else {
+      const cat = patch.category.trim();
+      db.run(sql`
+        INSERT INTO merchant_category_rules (counterparty, category, created_at, updated_at)
+        VALUES (${cp}, ${cat}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(counterparty) DO UPDATE SET
+          category = excluded.category,
+          updated_at = CURRENT_TIMESTAMP
+      `);
+      recordUpdated(
+        sql`(category IS NULL OR category != ${cat})`,
+        [sql`category = ${cat}`, sql`category_rule = 'merchant'`],
+      );
+    }
+  }
+
+  // --- Recurrence ---
+  if (patch.recurrence !== undefined) {
+    if (patch.recurrence === null) {
+      db.run(
+        sql`DELETE FROM merchant_recurrence_rules WHERE counterparty = ${cp}`,
+      );
+    } else {
+      const rec = patch.recurrence;
+      db.run(sql`
+        INSERT INTO merchant_recurrence_rules (counterparty, recurrence, created_at, updated_at)
+        VALUES (${cp}, ${rec}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(counterparty) DO UPDATE SET
+          recurrence = excluded.recurrence,
+          updated_at = CURRENT_TIMESTAMP
+      `);
+      recordUpdated(
+        sql`(recurrence IS NULL OR recurrence != ${rec})`,
+        [sql`recurrence = ${rec}`],
+      );
+    }
+  }
+
+  // --- Share ---
+  if (patch.sharedWith !== undefined || patch.shareCount !== undefined) {
+    const isClear =
+      (patch.sharedWith === null || patch.sharedWith?.length === 0) &&
+      (patch.shareCount == null || patch.shareCount === 1);
+    if (isClear) {
+      db.run(sql`DELETE FROM merchant_share_rules WHERE counterparty = ${cp}`);
+      recordUpdated(
+        sql`(shared_with IS NOT NULL OR share_count > 1)`,
+        [sql`shared_with = NULL`, sql`share_count = 1`],
+      );
+    } else {
+      const arr = patch.sharedWith ?? [];
+      const sharedJson = arr.length > 0 ? JSON.stringify(arr) : null;
+      const count = patch.shareCount ?? arr.length + 1;
+      db.run(sql`
+        INSERT INTO merchant_share_rules (counterparty, shared_with, share_count, created_at, updated_at)
+        VALUES (${cp}, ${sharedJson}, ${count}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(counterparty) DO UPDATE SET
+          shared_with = excluded.shared_with,
+          share_count = excluded.share_count,
+          updated_at = CURRENT_TIMESTAMP
+      `);
+      recordUpdated(
+        sql`(
+          (shared_with IS NULL AND ${sharedJson} IS NOT NULL)
+          OR (shared_with IS NOT NULL AND ${sharedJson} IS NULL)
+          OR (shared_with != ${sharedJson})
+          OR (share_count != ${count})
+        )`,
+        [
+          sql`shared_with = ${sharedJson}`,
+          sql`share_count = ${count}`,
+        ],
+      );
+    }
+  }
+
+  revalidatePath("/review");
+  revalidatePath("/dashboard");
+  return { ok: true, rowsUpdated: touched.size };
+}
