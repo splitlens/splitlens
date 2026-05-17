@@ -32,8 +32,21 @@ const PALETTES: { id: PaletteId; label: string; swatch: string }[] = [
   { id: "press", label: "Press · light", swatch: "#b8732d" },
 ];
 
+/** Routes that own their own page chrome and should suppress the global
+ *  TopNav. The merchant surface is dark/calm by design and ships its own
+ *  breadcrumb — stacking the TopNav above it breaks the visual register.
+ *  Matches both `/merchants` (index) and `/merchants/...` (detail). */
+const SUPPRESS_NAV_EXACT = new Set(["/merchants"]);
+const SUPPRESS_NAV_PREFIXES = ["/merchants/"];
+
 export function TopNav() {
   const pathname = usePathname() ?? "/";
+  if (
+    SUPPRESS_NAV_EXACT.has(pathname) ||
+    SUPPRESS_NAV_PREFIXES.some((p) => pathname.startsWith(p))
+  ) {
+    return null;
+  }
   return (
     <header
       className="flex items-center gap-6 px-8"

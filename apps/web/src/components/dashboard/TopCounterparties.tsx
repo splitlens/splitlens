@@ -37,18 +37,18 @@ export function TopCounterparties({ rows }: { rows: TopCounterparty[] }) {
         {rows.map((r, idx) => {
           const total = r.totalOut + r.totalIn;
           const widthPct = Math.max(2, (total / maxSpend) * 100);
-          // /review filters its txn list via the `q` free-text search
-          // param, which scans counterparty + narration. For well-named
-          // merchants this is effectively an exact-counterparty filter;
-          // for short generic names it can over-match a little but the
-          // user lands on a useful filtered view either way.
-          const href = `/review?q=${encodeURIComponent(r.counterparty)}`;
+          // Row click navigates to the dedicated merchant detail page,
+          // which surfaces history, cadence, locations, items, and per-
+          // person breakdowns. Previously this linked into /review with
+          // a free-text filter — the merchant page is the more complete
+          // drill-down now that it exists.
+          const href = `/merchants/${encodeURIComponent(r.counterparty)}`;
           return (
             <Link
               key={r.counterparty}
               href={href}
               className="flex flex-col"
-              aria-label={`Show all transactions with ${r.counterparty}`}
+              aria-label={`Open ${r.counterparty} detail`}
               style={{
                 padding: "10px 8px",
                 margin: "0 -8px",

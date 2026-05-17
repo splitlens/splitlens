@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { RecentTxn } from "@/lib/repo";
 import { fmtInr, fmtDate } from "@/lib/format";
 import { KindBadge } from "./TopCounterparties";
@@ -5,6 +6,17 @@ import { ShareTxnButton } from "@/components/friends/ShareTxnButton";
 import { FindEmailsButton } from "@/components/friends/FindEmailsButton";
 import type { PersonOption } from "@/components/friends/ShareTxnModal";
 import { getCategory } from "@/lib/taxonomy";
+
+/**
+ * Build the /merchants/[id] target for a recent row. Prefer the personId
+ * (the page resolver tries that first) so person rows route to the Person
+ * view; fall back to counterparty name for businesses.
+ */
+function merchantHrefFor(t: RecentTxn): string | null {
+  if (t.personId) return `/merchants/${encodeURIComponent(t.personId)}`;
+  if (t.counterparty) return `/merchants/${encodeURIComponent(t.counterparty)}`;
+  return null;
+}
 
 /**
  * The last N transactions. Prefers the clean `counterparty` over raw bank
@@ -83,6 +95,7 @@ export function RecentTxnsCard({
             {txns.map((t) => {
               const label = t.counterparty || t.narration || "—";
               const isShort = label.length <= 60;
+              const href = merchantHrefFor(t);
               const def = getCategory(t.category);
               return (
                 <tr
@@ -111,21 +124,37 @@ export function RecentTxnsCard({
                   </td>
                   <td style={{ padding: "10px 8px 10px 0", verticalAlign: "top" }}>
                     <div className="flex items-center gap-2">
-                      <span
-                        title={label}
-                        className={
-                          isShort ? undefined : "truncate"
-                        }
-                        style={{
-                          minWidth: 0,
-                          maxWidth: isShort ? undefined : "36rem",
-                          fontSize: 14,
-                          fontWeight: 500,
-                          color: "var(--fg)",
-                        }}
-                      >
-                        {label}
-                      </span>
+                      {href ? (
+                        <Link
+                          href={href}
+                          title={`Open ${label} detail`}
+                          className={`${isShort ? "" : "truncate"} hover:underline`}
+                          style={{
+                            minWidth: 0,
+                            maxWidth: isShort ? undefined : "36rem",
+                            fontSize: 14,
+                            fontWeight: 500,
+                            color: "var(--fg)",
+                            textDecoration: "none",
+                          }}
+                        >
+                          {label}
+                        </Link>
+                      ) : (
+                        <span
+                          title={label}
+                          className={isShort ? undefined : "truncate"}
+                          style={{
+                            minWidth: 0,
+                            maxWidth: isShort ? undefined : "36rem",
+                            fontSize: 14,
+                            fontWeight: 500,
+                            color: "var(--fg)",
+                          }}
+                        >
+                          {label}
+                        </span>
+                      )}
                       {t.counterpartyKind && (
                         <KindBadge kind={t.counterpartyKind} />
                       )}

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect } from "react";
 import type { DrillDownTxn, ItemEnrichment } from "@/lib/repo";
 import { fmtDate, fmtInr } from "@/lib/format";
@@ -124,17 +125,34 @@ export function DayDetailModal({
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex flex-col" style={{ flex: 1, minWidth: 0, gap: 4 }}>
                         <div className="flex items-center gap-2">
-                          <span
-                            title={label}
-                            className="truncate"
-                            style={{
-                              fontSize: 14,
-                              fontWeight: 500,
-                              color: "var(--fg)",
-                            }}
-                          >
-                            {label}
-                          </span>
+                          {t.counterparty ? (
+                            <Link
+                              href={`/merchants/${encodeURIComponent(t.counterparty)}`}
+                              title={`Open ${label} detail`}
+                              className="truncate hover:underline"
+                              onClick={onClose}
+                              style={{
+                                fontSize: 14,
+                                fontWeight: 500,
+                                color: "var(--fg)",
+                                textDecoration: "none",
+                              }}
+                            >
+                              {label}
+                            </Link>
+                          ) : (
+                            <span
+                              title={label}
+                              className="truncate"
+                              style={{
+                                fontSize: 14,
+                                fontWeight: 500,
+                                color: "var(--fg)",
+                              }}
+                            >
+                              {label}
+                            </span>
+                          )}
                           {t.counterpartyKind && (
                             <KindBadge kind={t.counterpartyKind} />
                           )}
