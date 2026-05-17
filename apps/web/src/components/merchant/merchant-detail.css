@@ -347,7 +347,12 @@
   width: 100%;
   border-radius: 2px;
   background: rgba(173, 154, 216, 0.18);
-  transition: background 120ms ease;
+  /* Spring-interpolate bar height when the underlying range changes
+     (drag-to-scrub or preset switch). 280ms eases the user into the
+     new distribution rather than snapping. */
+  transition:
+    background 220ms cubic-bezier(0.2, 0.8, 0.4, 1),
+    height 320ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 .md-board .biz-bar.in > .b { background: rgba(173, 154, 216, 0.55); }
 .md-board .biz-bar.hot.in > .b { background: var(--accent); }
@@ -644,8 +649,13 @@
   left: 0;
   right: 0;
   background: rgba(217, 168, 106, 0.22);
-  transition: opacity 120ms ease;
   border-radius: 2px;
+  /* Interpolate height + top so the running-balance bars settle into
+     their new position when the user changes range, instead of jumping. */
+  transition:
+    opacity 220ms cubic-bezier(0.2, 0.8, 0.4, 1),
+    height 320ms cubic-bezier(0.16, 1, 0.3, 1),
+    top 320ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 .md-board .per-col:not(.in) .b { opacity: 0.32; }
 .md-board .per-col .b.neg { background: rgba(209, 134, 114, 0.32); }

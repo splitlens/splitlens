@@ -89,11 +89,18 @@ export function KpiTiles({
         gap: 12,
       }}
     >
-      {tiles.map((t) => (
+      {tiles.map((t, idx) => (
         <div
           key={t.label}
-          className="surface flex flex-col"
-          style={{ padding: "14px 16px", gap: 6, minHeight: 96 }}
+          className="surface flex flex-col card-hoverable card-stagger-in"
+          style={
+            {
+              padding: "14px 16px",
+              gap: 6,
+              minHeight: 96,
+              "--card-idx": idx,
+            } as React.CSSProperties
+          }
         >
           <span className="eyebrow">{t.label}</span>
           <div className={`num-amount ${t.cls ?? ""}`} style={{ fontSize: 22 }}>

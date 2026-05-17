@@ -54,7 +54,7 @@ export function EmailMatchModal({
 
   return (
     <div
-      className="flex items-center justify-center"
+      className="flex items-center justify-center modal-backdrop-anim"
       style={{
         position: "fixed",
         inset: 0,
@@ -79,7 +79,7 @@ export function EmailMatchModal({
         }}
       />
       <div
-        className="surface flex flex-col"
+        className="surface flex flex-col modal-panel-anim"
         style={{
           position: "relative",
           width: "100%",

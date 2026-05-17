@@ -160,6 +160,194 @@ body {
   color: var(--accent-ink);
 }
 
+/* ── Apple-like polish · app-wide ───────────────────────────── */
+
+/* Hide scrollbars by default, reveal a slim one when the surface is
+   hovered. Matches macOS's behavior since OS X Mavericks. We keep the
+   element scrollable; only the chrome disappears. */
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  background: transparent;
+}
+*:hover::-webkit-scrollbar,
+*:focus::-webkit-scrollbar,
+*:focus-within::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--fg) 14%, transparent);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--fg) 28%, transparent);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Accent-colored focus ring. The default browser ring is harsh on a
+   dark background; we use a soft accent halo plus a thin inner line. */
+:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--bg),
+    0 0 0 4px color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: inherit;
+}
+
+/* Subtle tactile press feedback on every button and link. Light scale-
+   down conveys touch without overdoing it. */
+button:not(:disabled):active,
+a:active {
+  transform: scale(0.985);
+}
+button,
+a {
+  transition: transform 90ms cubic-bezier(0.2, 0.8, 0.4, 1);
+}
+
+/* Standard easing curves we want to use across the app. Cubic-bezier
+   values approximate Apple's "ease-out-expo" and a snappier "ease-out". */
+:root {
+  --ease-out: cubic-bezier(0.2, 0.8, 0.4, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* ── /review · Scrubber animations ──────────────────────────── */
+
+/* Month tile in the range strip. Active state animates smoothly via
+   transition; the tile lifts slightly on hover. */
+.scrubber-month-tile {
+  flex-shrink: 0;
+  padding: 5px 10px;
+  gap: 1px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    background 220ms var(--ease-out),
+    border-color 220ms var(--ease-out),
+    transform 180ms var(--ease-out);
+}
+.scrubber-month-tile:hover:not(.is-active) {
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+  transform: translateY(-1px);
+}
+.scrubber-month-tile.is-active {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+
+/* Day-grid bars inside the scrubber. Each bar's outer button is the
+   click target; the inner span carries the bar height + color. Heights
+   transition smoothly when the underlying data changes (e.g. after a
+   month switch). */
+.scrubber-day-bars > .scrubber-day-bar {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  padding: 0;
+  transition: transform 140ms var(--ease-out);
+}
+.scrubber-day-bars > .scrubber-day-bar:disabled {
+  cursor: default;
+}
+.scrubber-day-bars > .scrubber-day-bar > span {
+  width: 100%;
+  display: block;
+  border-radius: 1px;
+  transition:
+    height 320ms var(--ease-out-expo),
+    background 220ms var(--ease-out);
+}
+.scrubber-day-bars > .scrubber-day-bar:not(:disabled):hover > span {
+  filter: brightness(1.25);
+}
+.scrubber-day-bars > .scrubber-day-bar:not(:disabled):hover {
+  transform: scaleY(1.06);
+}
+
+/* ── Modal enter animations ─────────────────────────────────── */
+
+@keyframes modal-backdrop-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes modal-panel-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Apply to the full-screen backdrop element; panel-pop-in to the
+   actual panel inside it. Keep the timings tight — these are utility
+   modals, not splash screens. */
+.modal-backdrop-anim {
+  animation: modal-backdrop-fade-in 180ms var(--ease-out) both;
+}
+.modal-panel-anim {
+  animation: modal-panel-pop-in 240ms var(--ease-out-expo) both;
+  transform-origin: top center;
+}
+
+/* ── Dashboard / generic card polish ────────────────────────── */
+
+@keyframes card-fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Staggered entrance for grids of cards. The caller sets `--card-idx`
+   inline (0, 1, 2, …) and each card's delay is computed from that. */
+.card-stagger-in {
+  animation: card-fade-in-up 380ms var(--ease-out-expo) both;
+  animation-delay: calc(var(--card-idx, 0) * 45ms);
+}
+
+/* Subtle hover lift for any card-like surface. Apply this class
+   alongside `.surface` (or wherever a clickable card-shaped element
+   lives). Keeps shadow/y movement small — Apple is subtle. */
+.card-hoverable {
+  transition:
+    transform 220ms var(--ease-out),
+    box-shadow 220ms var(--ease-out),
+    border-color 220ms var(--ease-out);
+}
+.card-hoverable:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 24px color-mix(in srgb, #000 22%, transparent);
+}
+
 /* ── Typography helpers ─────────────────────────────────────── */
 
 /* `.serif` is a legacy class name — kept so call-sites don't churn.

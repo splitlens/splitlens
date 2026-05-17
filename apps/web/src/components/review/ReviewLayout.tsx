@@ -884,7 +884,10 @@ function Scrubber({
             <span className="muted-2">· click to jump to a day</span>
           </div>
         </div>
-        <div className="flex items-end gap-1" style={{ height: 32 }}>
+        <div
+          className="flex items-end gap-1 scrubber-day-bars"
+          style={{ height: 32 }}
+        >
           {Array.from({ length: lastDay }, (_, i) => i + 1).map((day) => {
             const count = selectedMonth ? dayCounts.get(day) ?? 0 : 0;
             const intensity = count > 0 ? Math.max(0.18, count / maxDay) : 0.04;
@@ -902,25 +905,15 @@ function Scrubber({
                   onPick({ from: iso, to: iso });
                 }}
                 title={`${day}: ${count} txn${count === 1 ? "" : "s"}`}
-                className="flex flex-col items-center"
-                style={{
-                  flex: 1,
-                  gap: 2,
-                  cursor: heatTarget ? "pointer" : "default",
-                  background: "transparent",
-                  border: "none",
-                  padding: 0,
-                }}
+                className="scrubber-day-bar"
+                aria-pressed={isActive ? "true" : "false"}
               >
                 <span
                   style={{
-                    width: "100%",
                     height: `${Math.max(2, intensity * 22)}px`,
                     background: isActive
                       ? "var(--accent)"
                       : `color-mix(in srgb, var(--accent) ${Math.round(intensity * 80)}%, transparent)`,
-                    borderRadius: 1,
-                    display: "block",
                   }}
                 />
               </button>
@@ -962,19 +955,38 @@ function MonthStrip({
 }) {
   const scrollerRef = useRef<HTMLDivElement>(null);
 
+  // Custom spring scroll. We replace the browser's scrollIntoView with a
+  // hand-rolled animation using easeOutExpo over 380ms — feels closer to
+  // macOS's "Reveal in Finder" animation than the inconsistent default
+  // smooth-scroll across browsers. We also throttle so consecutive
+  // selection-changes don't fight each other.
   useEffect(() => {
     const scroller = scrollerRef.current;
     if (!scroller) return;
     const target =
       scroller.querySelector<HTMLElement>("[data-month-active='true']") ??
-      // No active month → scroll to the right edge (latest month).
       (scroller.lastElementChild as HTMLElement | null);
     if (!target) return;
-    target.scrollIntoView({
-      behavior: "smooth",
-      block: "nearest",
-      inline: "center",
-    });
+
+    const scRect = scroller.getBoundingClientRect();
+    const tRect = target.getBoundingClientRect();
+    const targetCenter = tRect.left + tRect.width / 2;
+    const scCenter = scRect.left + scRect.width / 2;
+    const delta = targetCenter - scCenter;
+    const startScroll = scroller.scrollLeft;
+    const endScroll = startScroll + delta;
+
+    let frame = 0;
+    const start = performance.now();
+    const duration = 380;
+    const easeOutExpo = (t: number) => (t === 1 ? 1 : 1 - Math.pow(2, -10 * t));
+    const tick = (now: number) => {
+      const p = Math.min(1, (now - start) / duration);
+      scroller.scrollLeft = startScroll + (endScroll - startScroll) * easeOutExpo(p);
+      if (p < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
   }, [selectedYear, selectedMonth, months.length]);
 
   return (
@@ -1009,20 +1021,9 @@ function MonthStrip({
                   const to = `${mo.year}-${String(mo.month).padStart(2, "0")}-${String(lastD).padStart(2, "0")}`;
                   onPick({ from, to });
                 }}
-                className="flex flex-col items-center"
-                style={{
-                  flexShrink: 0,
-                  padding: "5px 10px",
-                  background: active ? "var(--accent-soft)" : "transparent",
-                  border: active
-                    ? "1px solid var(--accent-line)"
-                    : "1px solid transparent",
-                  borderRadius: 6,
-                  gap: 1,
-                  cursor: "pointer",
-                  color: "inherit",
-                  fontFamily: "inherit",
-                }}
+                className={`flex flex-col items-center scrubber-month-tile${
+                  active ? " is-active" : ""
+                }`}
               >
                 <span
                   className="tag"

@@ -41,6 +41,7 @@ export function DayDetailModal({
       onClick={onClose}
       aria-modal="true"
       role="dialog"
+      className="modal-backdrop-anim"
       style={{
         position: "fixed",
         inset: 0,
@@ -54,7 +55,7 @@ export function DayDetailModal({
       }}
     >
       <div
-        className="surface"
+        className="surface modal-panel-anim"
         onClick={(e) => e.stopPropagation()}
         style={{
           maxHeight: "85vh",
