@@ -923,7 +923,10 @@ function capitalize(s: string): string {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Scrubber — 8-month strip + day-of-month heatmap for the active month
+// Scrubber — three-tier time nav: year strip → month strip → day heatmap.
+// All three share one visual language (bars where height = count). Click
+// drills the filter down a level: year click scopes to that whole year,
+// month click scopes to that month, day click scopes to that day.
 // ────────────────────────────────────────────────────────────────────────────
 
 export function Scrubber({
@@ -937,9 +940,10 @@ export function Scrubber({
 }) {
   const { selectedYear, selectedMonth } = buckets;
 
-  // The strip is fed by `recentMonths` (most recent 12, server-aggregated
-  // across all years). That way the user can navigate between months
-  // without having to first drill into a year.
+  // The month strip spans every month with activity, sorted ascending —
+  // not constrained to the selected year, so the user can still
+  // cross-jump between years from the strip alone if they want to.
+  // (Year click is the explicit drill-down; this gives a fallback path.)
   const monthsStrip = buckets.recentMonths;
 
   // Day heatmap target: the explicitly selected month if any, otherwise the
@@ -965,6 +969,16 @@ export function Scrubber({
       }`
     : "No transactions to scrub yet";
 
+  // "Whole year selected" = filter spans Jan 1 → Dec 31 of selectedYear.
+  // Distinguishes year-level scoping from month/day scoping within that
+  // year, so the year strip can highlight the "you are scoping to this
+  // whole year" state distinctly from "you're inside a month of this
+  // year".
+  const isWholeYearSelected =
+    !!selectedYear &&
+    filter.from === `${selectedYear}-01-01` &&
+    filter.to === `${selectedYear}-12-31`;
+
   return (
     <div
       className="flex"
@@ -976,15 +990,33 @@ export function Scrubber({
         alignItems: "stretch",
       }}
     >
-      {/* Month strip — horizontally scrollable through ALL months. The
-          active month auto-scrolls into view; the latest month sits on the
-          right edge by default so the most-relevant data is one glance away. */}
-      <MonthStrip
-        months={monthsStrip}
-        selectedYear={selectedYear}
-        selectedMonth={selectedMonth}
-        onPick={onPick}
-      />
+      {/* Left column: stacked year strip + month strip. Both share the
+          same `scrubber-month-bar` visual vocabulary (bar height ∝
+          count, count label, period label) so reading them together
+          feels like one zoomed-in view of the same dataset. */}
+      <div
+        className="flex flex-col"
+        style={{ gap: 10, minWidth: 0, maxWidth: 520 }}
+      >
+        <YearStrip
+          years={buckets.years}
+          selectedYear={selectedYear}
+          isWholeYearSelected={isWholeYearSelected}
+          onPick={onPick}
+        />
+        {/* Month strip — horizontally scrollable through ALL months,
+            even after a year is picked, so the user can still
+            cross-jump years from this strip. The active month
+            auto-scrolls into view; the latest month sits on the right
+            edge by default so the most-relevant data is one glance
+            away. */}
+        <MonthStrip
+          months={monthsStrip}
+          selectedYear={selectedYear}
+          selectedMonth={selectedMonth}
+          onPick={onPick}
+        />
+      </div>
 
       <span style={{ width: 1, background: "var(--border)" }} />
 
@@ -1197,6 +1229,184 @@ function MonthStrip({
                     className="bar-dot"
                     aria-hidden
                     style={{ visibility: mo.unreviewed > 0 ? "visible" : "hidden" }}
+                  />
+                </button>
+              );
+            });
+          })()}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// YearStrip — top tier of the Scrubber's three-tier nav. One bar per year
+// with txn activity, reusing the same `.scrubber-month-bar` vocabulary as
+// the month strip so the two stacks read as one zoomed-out / zoomed-in
+// pair. Click a year to scope the filter to that whole year (Jan 1 →
+// Dec 31). Year click sets selectedYear without selectedMonth, so the
+// day heatmap then reads "no month selected" and the month strip
+// shows the whole year's months for drill-down.
+// ────────────────────────────────────────────────────────────────────────────
+
+function YearStrip({
+  years,
+  selectedYear,
+  isWholeYearSelected,
+  onPick,
+}: {
+  years: TimeBuckets["years"];
+  selectedYear: number | null;
+  /** True when the filter spans an entire year. When false, the user
+   *  has drilled deeper (a specific month or day within the year);
+   *  the active year is still highlighted but with a lighter treatment
+   *  so the user can tell "this year contains my filter" from "this
+   *  year IS my filter". */
+  isWholeYearSelected: boolean;
+  onPick: (patch: Partial<ReviewListFilter>) => void;
+}) {
+  // Spring-scroll the active year into view on selection change, same
+  // animation curve as the month strip so the two strips feel like one
+  // coordinated component.
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const target =
+      scroller.querySelector<HTMLElement>("[data-year-active='true']") ??
+      (scroller.lastElementChild as HTMLElement | null);
+    if (!target) return;
+    const scRect = scroller.getBoundingClientRect();
+    const tRect = target.getBoundingClientRect();
+    const targetCenter = tRect.left + tRect.width / 2;
+    const scCenter = scRect.left + scRect.width / 2;
+    const delta = targetCenter - scCenter;
+    const startScroll = scroller.scrollLeft;
+    const endScroll = startScroll + delta;
+    let frame = 0;
+    const start = performance.now();
+    const duration = 380;
+    const easeOutExpo = (t: number) => (t === 1 ? 1 : 1 - Math.pow(2, -10 * t));
+    const tick = (now: number) => {
+      const p = Math.min(1, (now - start) / duration);
+      scroller.scrollLeft = startScroll + (endScroll - startScroll) * easeOutExpo(p);
+      if (p < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [selectedYear, years.length]);
+
+  // Wheel → horizontal scroll, same as month strip. Years usually fit
+  // without overflow, but if the user has 10+ years of data this still
+  // works.
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const onWheel = (e: WheelEvent) => {
+      const horizontalIntent = Math.abs(e.deltaX) > Math.abs(e.deltaY);
+      const dominant = horizontalIntent ? e.deltaX : e.deltaY;
+      if (dominant === 0) return;
+      // Only intercept when the strip can actually scroll — otherwise
+      // we'd trap the page's wheel needlessly for users with few years.
+      const canScroll = scroller.scrollWidth > scroller.clientWidth + 1;
+      if (!canScroll) return;
+      e.preventDefault();
+      scroller.scrollLeft += dominant;
+    };
+    scroller.addEventListener("wheel", onWheel, { passive: false });
+    return () => scroller.removeEventListener("wheel", onWheel);
+  }, []);
+
+  return (
+    <div className="flex flex-col" style={{ gap: 6, minWidth: 0 }}>
+      <span className="eyebrow">Year</span>
+      {years.length === 0 ? (
+        <span className="small muted">no year data</span>
+      ) : (
+        <div
+          ref={scrollerRef}
+          className="flex items-stretch gap-1 scrubber-month-scroller"
+        >
+          {(() => {
+            const maxCount = Math.max(1, ...years.map((y) => y.count));
+            return years.map((y) => {
+              const isActive = selectedYear === y.year;
+              const intensity = y.count / maxCount;
+              // Distinguish "scoped to the whole year" from "scoped
+              // somewhere inside the year". Whole-year selection uses
+              // the full active style; partial uses a lighter outline
+              // only — so the year strip still tells you which year
+              // you're inside, even after you've drilled into a month
+              // or day.
+              const isHardActive = isActive && isWholeYearSelected;
+              return (
+                <button
+                  key={y.year}
+                  data-year-active={isActive ? "true" : "false"}
+                  type="button"
+                  title={`${y.year} · ${y.count} txn${y.count === 1 ? "" : "s"}`}
+                  onClick={() => {
+                    onPick({
+                      from: `${y.year}-01-01`,
+                      to: `${y.year}-12-31`,
+                    });
+                  }}
+                  className={`scrubber-month-bar${isHardActive ? " is-active" : ""}`}
+                  aria-pressed={isActive ? "true" : "false"}
+                  aria-label={`${y.year}, ${y.count} transactions`}
+                  style={{
+                    // Wider bars than the month strip since there are
+                    // fewer entries and we want them to feel weightier
+                    // — this is the highest-level summary in the
+                    // three-tier nav.
+                    width: 64,
+                    // Softer outline when the year contains the active
+                    // filter but isn't itself the filter (e.g. user is
+                    // looking at May 2025 — the 2025 bar gets a hint
+                    // of accent but not the full filled state).
+                    borderColor:
+                      isActive && !isHardActive
+                        ? "var(--border-strong)"
+                        : undefined,
+                    background:
+                      isActive && !isHardActive
+                        ? "color-mix(in srgb, var(--accent) 6%, transparent)"
+                        : undefined,
+                  }}
+                >
+                  <span className="bar-area">
+                    <span
+                      className="bar"
+                      style={{
+                        height: `${Math.max(8, intensity * 100)}%`,
+                        background: isHardActive
+                          ? "var(--accent)"
+                          : `color-mix(in srgb, var(--accent) ${Math.round(18 + intensity * 62)}%, transparent)`,
+                      }}
+                    />
+                  </span>
+                  <span className="bar-count">{y.count.toLocaleString()}</span>
+                  <span
+                    className="bar-label"
+                    style={{
+                      color: isHardActive
+                        ? "var(--accent)"
+                        : isActive
+                          ? "var(--fg-2)"
+                          : undefined,
+                    }}
+                  >
+                    {y.year}
+                  </span>
+                  {/* Empty placeholder matching the month strip's dot
+                      slot so the two strips share an identical row
+                      height — visual alignment matters when they
+                      stack. */}
+                  <span
+                    className="bar-dot"
+                    aria-hidden
+                    style={{ visibility: "hidden" }}
                   />
                 </button>
               );
