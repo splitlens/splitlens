@@ -33,7 +33,7 @@
  * InboxModal — we just present a different view.
  */
 import { AnimatePresence, motion } from "framer-motion";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Ico } from "@/components/Ico";
 import { fmtInr } from "@/lib/format";
@@ -53,6 +53,7 @@ export function SplitTxnModal({
   onAfterSave,
   positionIdx,
   positionTotal,
+  category,
 }: {
   row: SplitQueueRow;
   people: Array<{
@@ -67,6 +68,15 @@ export function SplitTxnModal({
   onAfterSave: () => void;
   positionIdx: number;
   positionTotal: number;
+  /** Category-grouped nav context. The queue sorts rows by category
+   *  so arrow-keying walks through all same-category txns before
+   *  changing category. We surface progress + animate the header
+   *  when the category changes between rows. */
+  category: {
+    name: string;
+    positionInCategory: number;
+    totalInCategory: number;
+  };
 }) {
   // Local form state — initialized from the row's current values.
   // Recurrence lives in the categorization modal (InboxModal at
@@ -79,6 +89,25 @@ export function SplitTxnModal({
 
   const [otherCount, setOtherCount] = useState(0);
   const [applyRule, setApplyRule] = useState(true);
+
+  // Category-change detection. The queue is sorted by category so
+  // arrow-keying walks through same-category rows. When the category
+  // shifts (last few Tea & Cigarettes done; first Food row appears)
+  // we briefly highlight the category strip so the user sees the
+  // transition. Tracked via useRef so it only flips on actual change,
+  // not on every re-render.
+  const prevCategoryRef = useRef<string | null>(null);
+  const [categoryChanged, setCategoryChanged] = useState(false);
+  useEffect(() => {
+    const prev = prevCategoryRef.current;
+    if (prev !== null && prev !== category.name) {
+      setCategoryChanged(true);
+      const t = window.setTimeout(() => setCategoryChanged(false), 700);
+      prevCategoryRef.current = category.name;
+      return () => window.clearTimeout(t);
+    }
+    prevCategoryRef.current = category.name;
+  }, [category.name]);
 
   // Reset state whenever the txn changes (when Prev/Next swaps the
   // row out from under us).
@@ -275,6 +304,76 @@ export function SplitTxnModal({
               <Ico name="x" size={13} />
             </button>
           </header>
+
+          {/* Category strip — shows progress within the active
+              category. Pulses accent when the category changes
+              between rows so the user sees the transition. */}
+          <div
+            style={{
+              padding: "10px 22px",
+              borderBottom: "1px solid var(--border)",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              background: categoryChanged
+                ? "var(--accent-soft)"
+                : "var(--surface-2)",
+              transition:
+                "background 600ms var(--ease-out-expo)",
+            }}
+          >
+            <Ico
+              name="filter"
+              size={13}
+              className={categoryChanged ? "accent" : "muted"}
+            />
+            <span
+              className="eyebrow"
+              style={{
+                color: categoryChanged ? "var(--accent)" : "var(--muted)",
+                transition: "color 600ms var(--ease-out-expo)",
+              }}
+            >
+              {category.name}
+            </span>
+            <span
+              className="mono tabular"
+              style={{
+                fontSize: 11.5,
+                color: "var(--muted-2)",
+                marginLeft: "auto",
+              }}
+            >
+              {category.positionInCategory} of {category.totalInCategory}{" "}
+              in this category
+            </span>
+            {/* Progress bar within category */}
+            <div
+              aria-hidden
+              style={{
+                width: 80,
+                height: 3,
+                background: "var(--surface-3)",
+                borderRadius: 2,
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  width: `${
+                    category.totalInCategory > 0
+                      ? (category.positionInCategory /
+                          category.totalInCategory) *
+                        100
+                      : 0
+                  }%`,
+                  height: "100%",
+                  background: "var(--accent)",
+                  transition: "width 220ms var(--ease-out)",
+                }}
+              />
+            </div>
+          </div>
 
           {/* Body */}
           <div style={{ overflowY: "auto", padding: "18px 22px", display: "flex", flexDirection: "column", gap: 18 }}>

@@ -195,13 +195,27 @@ export function SplitQueueClient({
       else if (reason === "recurring") recurringRows.push(queueRow);
       else largeRows.push(queueRow);
     }
-    // Sort each section by date desc.
-    const sortDesc = (a: SplitQueueRow, b: SplitQueueRow) =>
-      b.txnDate.localeCompare(a.txnDate) ||
-      (b.txnTime ?? "").localeCompare(a.txnTime ?? "");
-    personRows.sort(sortDesc);
-    recurringRows.sort(sortDesc);
-    largeRows.sort(sortDesc);
+    // Sort each section by (category, date desc). Co-locating
+    // same-category rows means arrow-keying through the modal walks
+    // the user through all the Tea & Cigarettes txns, then all the
+    // Food txns, etc. — much less context switching per decision
+    // than jumping by date alone. The modal header animates when
+    // the category changes between rows so the transition is
+    // visible.
+    const sortCatThenDate = (a: SplitQueueRow, b: SplitQueueRow) => {
+      const ac = a.category ?? "￿uncategorized";
+      const bc = b.category ?? "￿uncategorized";
+      // Uncategorized rows sink to the end of each section via the
+      // large-codepoint prefix; everything else collates by name.
+      if (ac !== bc) return ac.localeCompare(bc);
+      return (
+        b.txnDate.localeCompare(a.txnDate) ||
+        (b.txnTime ?? "").localeCompare(a.txnTime ?? "")
+      );
+    };
+    personRows.sort(sortCatThenDate);
+    recurringRows.sort(sortCatThenDate);
+    largeRows.sort(sortCatThenDate);
     return { personRows, recurringRows, largeRows };
   }, [filteredRows, largeThreshold, peopleByPersonId, showAll]);
 
@@ -580,21 +594,40 @@ export function SplitQueueClient({
         )}
       </div>
 
-      {active && (
-        <SplitTxnModal
-          row={active}
-          people={people}
-          onClose={() => setActiveId(null)}
-          onPrev={goPrev}
-          onNext={goNext}
-          onAfterSave={() => {
-            refresh();
-            goNext();
-          }}
-          positionIdx={flat.findIndex((r) => r.id === active.id) + 1}
-          positionTotal={flat.length}
-        />
-      )}
+      {active && (() => {
+        // Compute "N of M in this category" for the modal header.
+        // Because the queue is sorted (category, date desc) per
+        // section, all same-category rows are contiguous within each
+        // section — but cross-section the same category may appear
+        // again. We count across the WHOLE flat array so the user
+        // sees the global progress, not just within-section.
+        const activeCat = active.category ?? "Uncategorized";
+        const sameCat = flat.filter(
+          (r) => (r.category ?? "Uncategorized") === activeCat,
+        );
+        const positionInCategory =
+          sameCat.findIndex((r) => r.id === active.id) + 1;
+        return (
+          <SplitTxnModal
+            row={active}
+            people={people}
+            onClose={() => setActiveId(null)}
+            onPrev={goPrev}
+            onNext={goNext}
+            onAfterSave={() => {
+              refresh();
+              goNext();
+            }}
+            positionIdx={flat.findIndex((r) => r.id === active.id) + 1}
+            positionTotal={flat.length}
+            category={{
+              name: activeCat,
+              positionInCategory,
+              totalInCategory: sameCat.length,
+            }}
+          />
+        );
+      })()}
     </main>
   );
 }
