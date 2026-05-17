@@ -348,6 +348,26 @@ function InboxBody({
     "monthly" | "weekly" | "quarterly" | "yearly" | null
   >(null);
 
+  // Split-with smart default. When the txn's counterparty is a known
+  // person (counterparty_kind = "person" + person_id set) AND the
+  // user hasn't already split this row, suggest splitting 2-way with
+  // that person. We don't auto-fill — the WhoseExpense banner
+  // surfaces the suggestion and the user confirms with one click.
+  const splitSuggestion = useMemo(() => {
+    if (form.sharedWith.length > 0 || form.shareCount > 1) return null;
+    if (!txn.personId) return null;
+    if (txn.counterpartyKind !== "person") return null;
+    const person = people.find((p) => p.id === txn.personId);
+    if (!person) return null;
+    return person;
+  }, [
+    form.sharedWith.length,
+    form.shareCount,
+    txn.personId,
+    txn.counterpartyKind,
+    people,
+  ]);
+
   // Fetch the count of other un-reviewed txns for this merchant on mount
   // / when the txn changes. Cheap query (counterparty index hits), runs
   // in the background. We don't gate the UI on it — if it hasn't landed
@@ -933,6 +953,17 @@ function InboxBody({
             shareCount={form.shareCount}
             sharedWith={form.sharedWith}
             people={people}
+            suggestedSplitWith={splitSuggestion}
+            onApplySuggestion={
+              splitSuggestion
+                ? () =>
+                    setForm((f) => ({
+                      ...f,
+                      sharedWith: [splitSuggestion.displayName],
+                      shareCount: 2,
+                    }))
+                : undefined
+            }
             onChange={(next) =>
               setForm((f) => ({
                 ...f,
@@ -1496,12 +1527,22 @@ function WhoseExpense({
   shareCount,
   sharedWith,
   people,
+  suggestedSplitWith,
+  onApplySuggestion,
   onChange,
 }: {
   amount: number;
   shareCount: number;
   sharedWith: string[];
   people: InboxModalProps["people"];
+  /** When set, render a "✨ Split 2-way with {displayName}?" banner
+   *  above the controls. The parent decides when this should appear
+   *  (typically: counterparty_kind = "person" + not already split). */
+  suggestedSplitWith?: InboxModalProps["people"][number] | null;
+  /** Click handler for the suggested-split banner. The parent handles
+   *  the actual form update (we don't want to bake the form shape
+   *  into this component). */
+  onApplySuggestion?: () => void;
   onChange: (next: { sharedWith: string[]; shareCount: number }) => void;
 }) {
   const split = shareCount > 1 || sharedWith.length > 0;
@@ -1542,6 +1583,46 @@ function WhoseExpense({
           </span>
         )}
       </div>
+      {suggestedSplitWith && onApplySuggestion && (
+        <button
+          type="button"
+          onClick={onApplySuggestion}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "6px 10px",
+            background: "var(--accent-soft)",
+            border: "1px solid var(--accent-line)",
+            borderRadius: 7,
+            color: "var(--fg)",
+            fontFamily: "inherit",
+            fontSize: 12.5,
+            cursor: "pointer",
+            textAlign: "left",
+            transition:
+              "background 180ms ease, border-color 180ms ease, filter 180ms ease",
+          }}
+        >
+          <Ico name="sparkles" size={12} className="accent" />
+          <span style={{ flex: 1, minWidth: 0 }}>
+            Suggest: split{" "}
+            <b style={{ fontWeight: 500 }}>2-way</b> with{" "}
+            <b style={{ fontWeight: 500, color: "var(--accent)" }}>
+              {suggestedSplitWith.displayName}
+            </b>{" "}
+            <span style={{ color: "var(--muted)" }}>
+              ({fmtInr(amount / 2)} each)
+            </span>
+          </span>
+          <span
+            className="kbd"
+            style={{ fontSize: 10.5 }}
+          >
+            apply
+          </span>
+        </button>
+      )}
       <Segment
         options={[
           {
