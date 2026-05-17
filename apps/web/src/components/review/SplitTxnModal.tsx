@@ -53,10 +53,13 @@ import {
 /** Shape of a single nav entry surfaced by the strips/pickers. */
 type NavEntry = { name: string; firstIndex: number; count: number };
 
-/** Discriminant for which strip's picker is open. The two pickers are
- *  mutually exclusive — opening one closes the other so the user is
- *  never juggling two open menus inside the same modal. */
-type PickerDim = "category" | "merchant";
+/** Discriminant for which picker is open. All three are mutually
+ *  exclusive — opening one closes the others so the user is never
+ *  juggling open menus inside the same modal. The category and
+ *  merchant pickers JUMP to a different row on Enter; the friend
+ *  picker TOGGLES selection on Enter and stays open across multiple
+ *  toggles (multi-select). */
+type PickerDim = "category" | "merchant" | "friend";
 
 export function SplitTxnModal({
   row,
@@ -159,14 +162,45 @@ export function SplitTxnModal({
   const [pickerIndex, setPickerIndex] = useState(0);
   const pickerListRef = useRef<HTMLDivElement | null>(null);
   const pickerOpen = activePicker !== null;
+  // Friend list shaped as NavEntry for the unified keyboard model.
+  // `firstIndex` is unused for friends (no queue jump) — we keep the
+  // shape for type compatibility with categoryNav/merchantNav. Sorted
+  // by txnCount desc so the most-used friends sit first, same as the
+  // chip list rendering below.
+  const friendList = useMemo<NavEntry[]>(
+    () =>
+      [...people]
+        .sort((a, b) => b.txnCount - a.txnCount)
+        .map((p) => ({
+          name: p.displayName,
+          firstIndex: 0,
+          count: p.txnCount,
+        })),
+    [people],
+  );
   // Active list / current-idx / jump callback derived from the
   // discriminant. Keeps the keyboard handler dim-agnostic.
-  const activeList = activePicker === "merchant" ? merchantNav : categoryNav;
-  const activeIdx = activePicker === "merchant" ? merchantNavIdx : categoryNavIdx;
+  const activeList =
+    activePicker === "merchant"
+      ? merchantNav
+      : activePicker === "friend"
+        ? friendList
+        : categoryNav;
+  // For friend, there's no single "current" — selection is multi
+  // (sharedWith). Pass -1 so the picker's check-mark logic falls
+  // through to the per-friend membership check we wire up below.
+  const activeIdx =
+    activePicker === "merchant"
+      ? merchantNavIdx
+      : activePicker === "friend"
+        ? -1
+        : categoryNavIdx;
   const onActivePickerJump = useCallback(
     (name: string) => {
       if (activePicker === "merchant") onJumpToMerchant(name);
-      else onJumpToCategory(name);
+      else if (activePicker === "category") onJumpToCategory(name);
+      // friend dim doesn't jump — toggle handler is wired inline in
+      // the keyboard handler.
     },
     [activePicker, onJumpToCategory, onJumpToMerchant],
   );
@@ -285,7 +319,12 @@ export function SplitTxnModal({
         const next = prev.includes(displayName)
           ? prev.filter((n) => n !== displayName)
           : [...prev, displayName];
-        setShareCount(next.length + 1);
+        // Bump shareCount up if adding a friend overflows the current
+        // cap, but never reduce it — number keys (2-9) and J are the
+        // explicit knobs for shrinking the way. This lets "3-way with
+        // 1 named friend + 2 strangers" stay a valid configuration
+        // when the user has explicitly set the way to 3.
+        setShareCount((cur) => Math.max(cur, next.length + 1));
         return next;
       });
     },
@@ -301,6 +340,10 @@ export function SplitTxnModal({
   const setJustMe = useCallback(() => {
     setSharedWith([]);
     setShareCount(1);
+    // Exiting split mode closes the friend picker too — leaving it
+    // open with no chips visible (split=false hides the chip grid)
+    // would be a dead-end state.
+    setActivePicker((cur) => (cur === "friend" ? null : cur));
   }, []);
 
   const save = useCallback(
@@ -357,17 +400,23 @@ export function SplitTxnModal({
   //     { / }       → prev/next merchant jump (Shift + [/])
   //     C           → open category picker
   //     M           → open merchant picker
+  //     F           → open friend picker (enters split mode if not
+  //                   already, defaults to 2-way)
+  //     2 - 9       → set N-way split (enters split mode if not
+  //                   already; doesn't open picker — just sets count)
   //     S           → apply suggested split
   //     J           → just me
   //   Picker mode (any picker open) — list-nav focus:
   //     ↑ / ↓       → move highlight
   //     Home/End    → first/last item
-  //     Enter       → jump to highlighted item + close picker
+  //     Enter       → category/merchant: jump + close;
+  //                   friend: toggle selection + stay open
+  //                   (multi-select)
   //     Esc         → close picker
-  //     C           → toggle to category picker (or close if already
-  //                   on category)
-  //     M           → toggle to merchant picker (or close if already
-  //                   on merchant)
+  //     C / M / F   → toggle to that dim's picker (or close if
+  //                   already on the same dim)
+  //     2 - 9       → set N-way split (picker stays open — useful
+  //                   for "press F, press 3, pick 2 friends")
   //     all others  → trapped (don't change the underlying txn while
   //                   the user is mid-pick)
   useEffect(() => {
@@ -404,8 +453,17 @@ export function SplitTxnModal({
         if (e.key === "Enter") {
           e.preventDefault();
           const target = activeList[pickerIndex];
-          if (target) onActivePickerJump(target.name);
-          setActivePicker(null);
+          if (target) {
+            if (activePicker === "friend") {
+              // Friend picker is multi-select — Enter toggles the
+              // highlighted friend and the picker stays open so the
+              // user can add more friends in rapid succession.
+              toggleFriend(target.name);
+            } else {
+              onActivePickerJump(target.name);
+              setActivePicker(null);
+            }
+          }
           return;
         }
         if (e.key === "Escape") {
@@ -413,9 +471,9 @@ export function SplitTxnModal({
           setActivePicker(null);
           return;
         }
-        // C and M toggle dimensions: re-pressing the same key closes
-        // the picker, pressing the other key swaps to that dimension
-        // without an intermediate close.
+        // C / M / F toggle dimensions: re-pressing the same key
+        // closes the picker, pressing another swaps to that
+        // dimension without an intermediate close.
         if (e.key === "c" || e.key === "C") {
           e.preventDefault();
           setActivePicker((cur) => (cur === "category" ? null : "category"));
@@ -424,6 +482,23 @@ export function SplitTxnModal({
         if (e.key === "m" || e.key === "M") {
           e.preventDefault();
           setActivePicker((cur) => (cur === "merchant" ? null : "merchant"));
+          return;
+        }
+        if (e.key === "f" || e.key === "F") {
+          e.preventDefault();
+          // Entering friend picker bumps the way to at least 2 so
+          // the chip grid renders.
+          setShareCount((cur) => Math.max(cur, 2));
+          setActivePicker((cur) => (cur === "friend" ? null : "friend"));
+          return;
+        }
+        // 2-9 set the way (number of total people in the split).
+        // Picker stays open — useful flow: press F to open friend
+        // picker, press 3 to set 3-way, then ↑/↓/Enter to pick the
+        // 2 friend slots.
+        if (/^[2-9]$/.test(e.key)) {
+          e.preventDefault();
+          setShareCount(parseInt(e.key, 10));
           return;
         }
         // Trap any other key that would normally mutate the txn or
@@ -485,6 +560,20 @@ export function SplitTxnModal({
       } else if (e.key === "m" || e.key === "M") {
         e.preventDefault();
         setActivePicker("merchant");
+      } else if (e.key === "f" || e.key === "F") {
+        // F enters split mode (with a default 2-way) and opens the
+        // friend picker so the user can immediately pick who to
+        // split with — one keystroke "activate splitting".
+        e.preventDefault();
+        setShareCount((cur) => Math.max(cur, 2));
+        setActivePicker("friend");
+      } else if (/^[2-9]$/.test(e.key)) {
+        // Number keys set the N-way split count. We don't auto-open
+        // the friend picker here so the user can press "3" to bump
+        // count then "F" if they want to pick friends, or "Enter" to
+        // save a 3-way with no named friends.
+        e.preventDefault();
+        setShareCount(parseInt(e.key, 10));
       } else if (e.key === "s" || e.key === "S") {
         e.preventDefault();
         applySuggested();
@@ -507,6 +596,8 @@ export function SplitTxnModal({
     onActivePickerJump,
     applySuggested,
     setJustMe,
+    toggleFriend,
+    activePicker,
     pickerOpen,
     pickerIndex,
     activeList,
@@ -878,39 +969,88 @@ export function SplitTxnModal({
                 </button>
               </div>
               {split && (
-                <div
-                  style={{
-                    display: "flex",
-                    flexWrap: "wrap",
-                    gap: 6,
-                  }}
-                >
-                  {sortedPeople.map((p) => {
-                    const on = sharedWith.includes(p.displayName);
-                    return (
-                      <button
-                        key={p.id}
-                        type="button"
-                        onClick={() => toggleFriend(p.displayName)}
-                        className="chip"
-                        style={{
-                          background: on
-                            ? "var(--accent-soft)"
-                            : "transparent",
-                          borderColor: on
-                            ? "var(--accent-line)"
-                            : "var(--border)",
-                          color: on ? "var(--accent)" : "var(--fg-2)",
-                          cursor: "pointer",
-                          fontFamily: "inherit",
-                        }}
-                      >
-                        {on && <Ico name="check" size={11} />}
-                        {p.displayName}
-                      </button>
-                    );
-                  })}
-                </div>
+                <>
+                  {activePicker === "friend" && (
+                    <div
+                      role="status"
+                      aria-live="polite"
+                      style={{
+                        marginBottom: 6,
+                        padding: "4px 8px",
+                        background: "var(--accent-soft)",
+                        border: "1px solid var(--accent-line)",
+                        borderRadius: 6,
+                        color: "var(--accent)",
+                        fontSize: 11.5,
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                      }}
+                    >
+                      <Ico name="users" size={11} />
+                      <span style={{ flex: 1 }}>
+                        Friend picker · <span className="kbd">↑</span>/<span className="kbd">↓</span> nav ·{" "}
+                        <span className="kbd">↵</span> toggle ·{" "}
+                        <span className="kbd">2</span>–<span className="kbd">9</span> way ·{" "}
+                        <span className="kbd">Esc</span> close
+                      </span>
+                      <span className="mono tabular" style={{ color: "var(--accent)" }}>
+                        {ways}-way · {sharedWith.length} named
+                      </span>
+                    </div>
+                  )}
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: 6,
+                    }}
+                  >
+                    {sortedPeople.map((p, i) => {
+                      const on = sharedWith.includes(p.displayName);
+                      const isFocused =
+                        activePicker === "friend" && i === pickerIndex;
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => toggleFriend(p.displayName)}
+                          onMouseEnter={() => {
+                            // Mirror category/merchant picker behavior:
+                            // mouse hover moves the keyboard highlight
+                            // so mouse + keyboard mix cleanly.
+                            if (activePicker === "friend") setPickerIndex(i);
+                          }}
+                          className="chip"
+                          style={{
+                            background: on
+                              ? "var(--accent-soft)"
+                              : "transparent",
+                            borderColor: on
+                              ? "var(--accent-line)"
+                              : "var(--border)",
+                            color: on ? "var(--accent)" : "var(--fg-2)",
+                            cursor: "pointer",
+                            fontFamily: "inherit",
+                            // Focus ring: a stronger accent outline
+                            // around the keyboard-highlighted chip.
+                            // Uses box-shadow so it sits outside the
+                            // existing border without shifting layout.
+                            boxShadow: isFocused
+                              ? "0 0 0 2px var(--accent)"
+                              : undefined,
+                            outline: "none",
+                            transition:
+                              "box-shadow 140ms var(--ease-out), background 140ms var(--ease-out)",
+                          }}
+                        >
+                          {on && <Ico name="check" size={11} />}
+                          {p.displayName}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
               )}
               {split && row.direction === "debit" && (
                 <div
@@ -1073,21 +1213,32 @@ export function SplitTxnModal({
           >
             <span className="tiny muted" style={{ flex: 1 }}>
               {pickerOpen ? (
-                <>
-                  <span className="kbd">↑</span>/<span className="kbd">↓</span> highlight ·{" "}
-                  <span className="kbd">↵</span> jump ·{" "}
-                  <span className="kbd">C</span>/<span className="kbd">M</span> swap ·{" "}
-                  <span className="kbd">Esc</span> close picker
-                </>
+                activePicker === "friend" ? (
+                  <>
+                    <span className="kbd">↑</span>/<span className="kbd">↓</span> nav ·{" "}
+                    <span className="kbd">↵</span> toggle ·{" "}
+                    <span className="kbd">2</span>–<span className="kbd">9</span> way ·{" "}
+                    <span className="kbd">C</span>/<span className="kbd">M</span>/<span className="kbd">F</span> swap ·{" "}
+                    <span className="kbd">Esc</span> close
+                  </>
+                ) : (
+                  <>
+                    <span className="kbd">↑</span>/<span className="kbd">↓</span> highlight ·{" "}
+                    <span className="kbd">↵</span> jump ·{" "}
+                    <span className="kbd">C</span>/<span className="kbd">M</span>/<span className="kbd">F</span> swap ·{" "}
+                    <span className="kbd">Esc</span> close picker
+                  </>
+                )
               ) : (
                 <>
                   <span className="kbd">↵</span> save ·{" "}
                   <span className="kbd">S</span> suggest ·{" "}
                   <span className="kbd">J</span> just me ·{" "}
+                  <span className="kbd">F</span> friends ·{" "}
+                  <span className="kbd">2</span>–<span className="kbd">9</span> way ·{" "}
                   <span className="kbd">Space</span> detail ·{" "}
                   <span className="kbd">[</span>/<span className="kbd">]</span> cat ·{" "}
                   <span className="kbd">&#123;</span>/<span className="kbd">&#125;</span> merch ·{" "}
-                  <span className="kbd">C</span>/<span className="kbd">M</span> pick ·{" "}
                   <span className="kbd">Esc</span> close
                 </>
               )}
