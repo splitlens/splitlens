@@ -377,7 +377,7 @@ export function ReviewForm({
         </div>
         {txn.sources.length === 0 ? (
           <p className="mt-2 text-xs italic text-zinc-500 dark:text-zinc-400">
-            No source rows. This shouldn't normally happen — every canonical
+            No source rows. This shouldn&apos;t normally happen — every canonical
             txn is observed by at least one parser.
           </p>
         ) : (
@@ -471,7 +471,7 @@ export function ReviewForm({
           <p className="mb-2 text-[11px] text-zinc-500 dark:text-zinc-400">
             Drop a Zepto invoice PDF (best — parsed inline with items) or a
             quick-commerce screenshot. Force-attaches to <em>this</em> txn —
-            bypasses the daemon's auto-match.
+            bypasses the daemon&apos;s auto-match.
           </p>
           <BillAttachDropzone
             txnId={txn.id}

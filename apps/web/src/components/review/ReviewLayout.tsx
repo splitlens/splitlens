@@ -19,7 +19,7 @@
  *   - Form content max-width is 760px so it doesn't sprawl across a 4K
  *     screen — readable form widths beat "fill all available space".
  */
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import type {

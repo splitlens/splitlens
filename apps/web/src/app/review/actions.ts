@@ -1,7 +1,7 @@
 "use server";
 
 import "server-only";
-import { mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, extname, join } from "node:path";
 import { sql } from "drizzle-orm";
@@ -458,8 +458,7 @@ function moveToArchive(
   try {
     renameSync(stagedPath, archivedPath);
   } catch {
-    // Cross-device fallback: read + write + unlink
-    const { copyFileSync } = require("node:fs") as typeof import("node:fs");
+    // Cross-device fallback: copy + unlink
     copyFileSync(stagedPath, archivedPath);
     try {
       unlinkSync(stagedPath);

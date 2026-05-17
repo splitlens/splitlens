@@ -20,8 +20,6 @@ export function SpendingCalendar({ daily }: { daily: DailySpendPoint[] }) {
 
   const [year, setYear] = useState<number>(() => years[0] ?? new Date().getFullYear());
 
-  if (years.length === 0) return null;
-
   const byDate = useMemo(() => {
     const m = new Map<string, DailySpendPoint>();
     for (const d of daily) m.set(d.txnDate, d);
@@ -35,14 +33,16 @@ export function SpendingCalendar({ daily }: { daily: DailySpendPoint[] }) {
     [cells],
   );
 
-  const yearTotal = cells.reduce((s, c) => s + (c.point?.totalOut ?? 0), 0);
-  const daysSpent = cells.filter((c) => c.point && c.point.totalOut > 0).length;
-
   // Modal drill-down state. `selectedDate` is the ISO date the user clicked;
   // `txns` is filled by the server action when the click handler resolves.
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [drillTxns, setDrillTxns] = useState<DrillDownTxn[]>([]);
   const [isPending, startTransition] = useTransition();
+
+  if (years.length === 0) return null;
+
+  const yearTotal = cells.reduce((s, c) => s + (c.point?.totalOut ?? 0), 0);
+  const daysSpent = cells.filter((c) => c.point && c.point.totalOut > 0).length;
 
   function handleDayClick(date: string) {
     setSelectedDate(date);
