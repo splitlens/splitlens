@@ -1074,6 +1074,30 @@ function MonthStrip({
     return () => cancelAnimationFrame(frame);
   }, [selectedYear, selectedMonth, months.length]);
 
+  // Wheel → horizontal scroll. We attach this via a native addEventListener
+  // with `{ passive: false }` instead of the JSX onWheel prop because React's
+  // root delegator marks `wheel` listeners as passive — preventDefault() is
+  // silently ignored in a passive listener, so the page would scroll alongside
+  // the strip. Native non-passive listener is the standard escape hatch.
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const onWheel = (e: WheelEvent) => {
+      // Always block the default — even when the strip itself isn't
+      // overflowing, the user's intent here is "interact with this strip,
+      // not scroll the page." If the strip is at its scroll boundary, the
+      // page just stays put rather than the user's expected: tiny
+      // friction is worth not having the page yank out from under them.
+      const horizontalIntent = Math.abs(e.deltaX) > Math.abs(e.deltaY);
+      const dominant = horizontalIntent ? e.deltaX : e.deltaY;
+      if (dominant === 0) return;
+      e.preventDefault();
+      scroller.scrollLeft += dominant;
+    };
+    scroller.addEventListener("wheel", onWheel, { passive: false });
+    return () => scroller.removeEventListener("wheel", onWheel);
+  }, []);
+
   return (
     <div className="flex flex-col" style={{ gap: 6, minWidth: 0, maxWidth: 520 }}>
       <span className="eyebrow">Range</span>
@@ -1083,20 +1107,6 @@ function MonthStrip({
         <div
           ref={scrollerRef}
           className="flex items-stretch gap-1 scrubber-month-scroller"
-          onWheel={(e) => {
-            // Translate vertical mouse-wheel into horizontal scroll. A
-            // trackpad swipe with horizontal delta still uses deltaX
-            // natively; this only kicks in when the dominant axis is
-            // vertical (mouse wheel). Stops bubbling so the page
-            // doesn't scroll alongside.
-            const el = e.currentTarget;
-            const horizontalIntent = Math.abs(e.deltaX) > Math.abs(e.deltaY);
-            const overflowing = el.scrollWidth > el.clientWidth;
-            if (overflowing && !horizontalIntent && e.deltaY !== 0) {
-              el.scrollLeft += e.deltaY;
-              e.preventDefault();
-            }
-          }}
         >
           {(() => {
             // Bar height is proportional to count vs the loudest month in
