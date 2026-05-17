@@ -119,6 +119,10 @@ function BizIdentity({
     : "—";
 
   const lifetimeMonths = monthSpan(data.firstSeen, data.lastSeen);
+  const cadenceChip = cadenceChipFor(
+    data.lifetimeCount,
+    Math.max(1, lifetimeMonths),
+  );
 
   return (
     <div className="biz-id-grid">
@@ -139,9 +143,13 @@ function BizIdentity({
                 <span className="dot" style={{ background: "#ad9ad8" }} />
                 Business
               </span>
-              {data.topCategory && (
-                <span className="chip accent">{data.topCategory.split(":")[1] ?? data.topCategory}</span>
+              {cadenceChip && (
+                <span className="chip accent">{cadenceChip}</span>
               )}
+              {data.topCategory && (
+                <span className="chip">{data.topCategory.split(":")[1] ?? data.topCategory}</span>
+              )}
+              <span className="chip ghost">+ tag</span>
             </div>
           </div>
         </div>
@@ -208,6 +216,20 @@ function KpiCell({
       <div className="s">{hint}</div>
     </div>
   );
+}
+
+/**
+ * Lifetime-cadence label for the identity chip. Buckets by typical interval
+ * between transactions, matching the design's "Frequent · weekly" pattern.
+ * Returns null for merchants with too little history to characterize.
+ */
+function cadenceChipFor(count: number, months: number): string | null {
+  if (count < 2 || months < 1) return null;
+  const perMonth = count / months;
+  if (perMonth >= 4) return "Frequent · weekly";
+  if (perMonth >= 1) return "Regular · monthly";
+  if (perMonth >= 0.34) return "Occasional";
+  return "Rare";
 }
 
 function monthSpan(from: string | null, to: string | null): number {
@@ -297,6 +319,7 @@ function BizTrend({
           </div>
         </div>
         <div className="axis-buttons">
+          <button type="button">Monthly</button>
           <button type="button" className="on">Spend</button>
           <button type="button">Count</button>
           <button type="button">Avg basket</button>
@@ -740,6 +763,18 @@ function BizFootbar({
         {sumN} txns · {range.label}
       </span>
       <span style={{ flex: 1 }} />
+      <div className="biz-foot-keys">
+        <span>
+          <span className="kbd">↑↓</span> nav
+        </span>
+        <span>
+          <span className="kbd">⏎</span> open
+        </span>
+        <span>
+          <span className="kbd">⌘E</span> rename
+        </span>
+      </div>
+      <span style={{ color: "var(--muted-3)" }}>|</span>
       <button type="button" className="btn outline">
         Bulk-tag {sumN} as{" "}
         {data.topCategory?.split(":")[1] ?? data.topCategory ?? "—"}

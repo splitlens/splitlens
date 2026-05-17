@@ -108,10 +108,14 @@ function PerHero({
       : dir === "cre"
         ? `${first} owes you`
         : "You’re even";
-  const monthsLabel =
-    data.lifetimeIn + data.lifetimeOut > 0
-      ? `${data.months.filter((m) => m.c + m.d !== 0).length} active months`
-      : "no activity yet";
+  const activeMonths = data.months.filter((m) => m.c + m.d !== 0).length;
+  const lifetimeTxnCount = data.debits.length + data.credits.length;
+  const whoSuffix = (() => {
+    if (lifetimeTxnCount === 0) return "no activity yet";
+    if (activeMonths === 0) return `${lifetimeTxnCount} transactions`;
+    return `${lifetimeTxnCount} transactions over ${activeMonths} months`;
+  })();
+  const settleHint = settleByText(dir);
 
   return (
     <div className="per-hero">
@@ -125,7 +129,7 @@ function PerHero({
               <span style={{ color: "var(--muted-3)" }}>·</span>
             )}
             <span>
-              {humanRelation(data.relationship)} · {monthsLabel}
+              {humanRelation(data.relationship)} · {whoSuffix}
             </span>
           </div>
           <div className="tags">
@@ -134,6 +138,7 @@ function PerHero({
               Person
             </span>
             <span className="chip">{humanRelation(data.relationship)}</span>
+            <span className="chip ghost">+ tag</span>
           </div>
         </div>
       </div>
@@ -150,6 +155,14 @@ function PerHero({
           ) : (
             <>
               <b>{label}</b>
+              {settleHint && (
+                <>
+                  <span style={{ color: "var(--muted-3)", margin: "0 6px" }}>
+                    ·
+                  </span>
+                  {settleHint}
+                </>
+              )}
             </>
           )}
         </span>
@@ -164,11 +177,26 @@ function PerHero({
           >
             {dir === "cre" ? "Request" : "Settle"}
             {balance !== 0 ? ` ${fmtInr(Math.abs(balance), { showZero: true })}` : ""}
+            <span className="kbd kbd-on-accent">S</span>
           </button>
         </div>
       </div>
     </div>
   );
+}
+
+/**
+ * Returns a "settle by …" hint for the balance line. We don't know real
+ * settlement deadlines (no due-date data plumbed yet), so we anchor to the
+ * 5th of next month as a reasonable default for rent-style monthly cadence.
+ * Matches the design's "settle by Oct 5" copy.
+ */
+function settleByText(dir: "deb" | "cre" | "zero"): string | null {
+  if (dir === "zero") return null;
+  const now = new Date();
+  const next = new Date(now.getFullYear(), now.getMonth() + 1, 5);
+  const month = next.toLocaleString("en-IN", { month: "short" });
+  return `settle by ${month} ${next.getDate()}`;
 }
 
 function humanRelation(rel: string): string {
@@ -618,6 +646,18 @@ function PerFootbar({
             : `${first} owes ${fmtInr(Math.abs(bal))}`}
       </span>
       <span style={{ flex: 1 }} />
+      <div className="per-foot-keys">
+        <span>
+          <span className="kbd">S</span> settle
+        </span>
+        <span>
+          <span className="kbd">R</span> request
+        </span>
+        <span>
+          <span className="kbd">⌘E</span> edit relation
+        </span>
+      </div>
+      <span style={{ color: "var(--muted-3)" }}>|</span>
       <button type="button" className="btn outline">
         Send statement
       </button>

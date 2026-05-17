@@ -139,6 +139,29 @@
   color: var(--muted);
   background: var(--surface);
 }
+/* kbd hint that sits ON an accent-filled surface (e.g. inside a primary btn) */
+.md-board .kbd.kbd-on-accent {
+  background: rgba(0, 0, 0, 0.14);
+  color: var(--accent-ink);
+  border-color: rgba(0, 0, 0, 0.22);
+  margin-left: 4px;
+}
+
+/* Inline kbd-hint strip in the footers — one kbd plus a label per item */
+.md-board .biz-foot-keys,
+.md-board .per-foot-keys {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.md-board .biz-foot-keys > span,
+.md-board .per-foot-keys > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 
 /* ── Breadcrumb (shared by both views) ──────────────────────────────────── */
 
