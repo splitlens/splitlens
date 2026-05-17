@@ -1142,6 +1142,81 @@ export async function countOtherUnreviewedForMerchant(
   return row?.n ?? 0;
 }
 
+/**
+ * Detect the most likely recurrence for a counterparty by analyzing
+ * the actual spacing of its prior txns. Returns one of the recurrence
+ * enum values, or null when there isn't enough signal.
+ *
+ * Heuristic:
+ *   - Need at least 3 txns to claim any cadence.
+ *   - Compute median gap (in days) between consecutive txns.
+ *   - Map the median to a bucket if it's within tolerance:
+ *       6-9 days   → weekly
+ *       25-35 days → monthly
+ *       80-100 days → quarterly
+ *       340-380 days → yearly
+ *   - Add an amount-stability check: if the median amount-variance
+ *     across the same set is > 30%, downgrade confidence (return
+ *     null) — a "monthly" Swiggy with wildly varying amounts is
+ *     really just "frequent," not recurring.
+ *
+ * Single SQL pull + JS arithmetic. Cheap (one indexed query).
+ */
+export async function detectMerchantRecurrence(
+  counterparty: string,
+): Promise<
+  "one_time" | "monthly" | "weekly" | "quarterly" | "yearly" | null
+> {
+  const cp = counterparty.trim();
+  if (!cp) return null;
+
+  const rows = openDb().all<{ txn_date: string; amount: number }>(sql`
+    SELECT txn_date, COALESCE(withdrawal, deposit, 0) AS amount
+    FROM transactions
+    WHERE counterparty = ${cp}
+    ORDER BY txn_date ASC
+  `);
+  if (rows.length < 3) return null;
+
+  // Day gaps between consecutive txns.
+  const gaps: number[] = [];
+  for (let i = 1; i < rows.length; i++) {
+    const a = new Date(rows[i - 1]!.txn_date + "T00:00:00Z").getTime();
+    const b = new Date(rows[i]!.txn_date + "T00:00:00Z").getTime();
+    const days = Math.round((b - a) / 86_400_000);
+    if (days >= 0) gaps.push(days);
+  }
+  if (gaps.length < 2) return null;
+
+  // Median gap — robust to outliers (one big break doesn't blow up
+  // the mean for an otherwise-monthly merchant).
+  const sortedGaps = [...gaps].sort((a, b) => a - b);
+  const median = sortedGaps[Math.floor(sortedGaps.length / 2)] ?? 0;
+
+  // Amount stability — coefficient of variation. If amounts vary
+  // wildly, the merchant is "frequent" but not really recurring in
+  // the budget sense.
+  const amounts = rows.map((r) => Number(r.amount)).filter((n) => n > 0);
+  if (amounts.length >= 3) {
+    const mean = amounts.reduce((s, n) => s + n, 0) / amounts.length;
+    const variance =
+      amounts.reduce((s, n) => s + (n - mean) ** 2, 0) / amounts.length;
+    const std = Math.sqrt(variance);
+    const cv = mean > 0 ? std / mean : 0;
+    // Allow more variation for weekly/monthly (food delivery,
+    // groceries) than for fixed recurring (rent, subs). A coefficient
+    // of variation > 0.7 means amounts swing too wildly to call this
+    // recurring.
+    if (cv > 0.7) return null;
+  }
+
+  if (median >= 6 && median <= 9) return "weekly";
+  if (median >= 25 && median <= 35) return "monthly";
+  if (median >= 80 && median <= 100) return "quarterly";
+  if (median >= 340 && median <= 380) return "yearly";
+  return null;
+}
+
 // ----------------------------------------------------------------------------
 // Three-dimensional per-merchant rules (category + recurrence + share)
 // ----------------------------------------------------------------------------

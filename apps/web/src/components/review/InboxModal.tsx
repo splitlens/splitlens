@@ -48,6 +48,7 @@ import {
   applyMerchantCategoryRule,
   applyMerchantRule,
   countOtherUnreviewedForMerchant,
+  detectMerchantRecurrence,
   type TransactionEdits,
 } from "@/app/review/actions";
 import {
@@ -338,6 +339,15 @@ function InboxBody({
   const [applyRecurrenceToAll, setApplyRecurrenceToAll] = useState<boolean>(true);
   const [applyShareToAll, setApplyShareToAll] = useState<boolean>(true);
 
+  // Recurrence auto-detection. Pure computed-from-history signal
+  // (median gap + amount stability). When we detect a strong cadence
+  // the recurrence Segment renders an accent ✨ next to the matching
+  // option so the user can confirm with a single keystroke instead
+  // of reading the docs to remember which one is "monthly."
+  const [detectedRecurrence, setDetectedRecurrence] = useState<
+    "monthly" | "weekly" | "quarterly" | "yearly" | null
+  >(null);
+
   // Fetch the count of other un-reviewed txns for this merchant on mount
   // / when the txn changes. Cheap query (counterparty index hits), runs
   // in the background. We don't gate the UI on it — if it hasn't landed
@@ -346,6 +356,7 @@ function InboxBody({
   useEffect(() => {
     if (!form.counterparty || form.counterparty.trim() === "") {
       setOtherUnreviewedCount(0);
+      setDetectedRecurrence(null);
       return;
     }
     let cancelled = false;
@@ -354,6 +365,18 @@ function InboxBody({
         if (!cancelled) setOtherUnreviewedCount(n);
       },
     );
+    // Detect the merchant's typical cadence from its full txn history.
+    // Surfaces as a ✨ chip next to the matching recurrence option in
+    // the Segment below — one keystroke to confirm.
+    detectMerchantRecurrence(form.counterparty.trim()).then((rec) => {
+      if (!cancelled) {
+        if (rec === "monthly" || rec === "weekly" || rec === "quarterly" || rec === "yearly") {
+          setDetectedRecurrence(rec);
+        } else {
+          setDetectedRecurrence(null);
+        }
+      }
+    });
     return () => {
       cancelled = true;
     };
@@ -919,7 +942,36 @@ function InboxBody({
             }
           />
           <div className="flex flex-col gap-2">
-            <span className="eyebrow">How often</span>
+            <span
+              className="eyebrow"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              How often
+              {detectedRecurrence && (
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    padding: "1px 7px",
+                    borderRadius: 999,
+                    fontSize: 10.5,
+                    background: "var(--accent-soft)",
+                    color: "var(--accent)",
+                    border: "1px solid var(--accent-line)",
+                    textTransform: "none",
+                    letterSpacing: 0,
+                  }}
+                >
+                  <Ico name="sparkles" size={10} />
+                  detected {detectedRecurrence}
+                </span>
+              )}
+            </span>
             <Segment
               options={RECURRENCES.map((r) => ({
                 key: r.id,
@@ -927,6 +979,12 @@ function InboxBody({
                 active: (form.recurrence ?? "one_time") === r.id,
                 onClick: () =>
                   setForm({ ...form, recurrence: r.id === "one_time" ? null : r.id }),
+                // ✨ chip next to the auto-detected option so the
+                // user knows which one is the "expected" choice.
+                hint:
+                  detectedRecurrence && r.id === detectedRecurrence
+                    ? "auto"
+                    : undefined,
               }))}
             />
             {recDef && recDef.id !== "one_time" && (
@@ -1337,6 +1395,9 @@ function Segment({
     icon?: import("@/components/Ico").IcoName;
     active: boolean;
     onClick: () => void;
+    /** When set, renders a small ✨ next to the label — used by the
+     *  recurrence Segment to flag the auto-detected option. */
+    hint?: "auto" | undefined;
   }[];
 }) {
   return (
@@ -1362,17 +1423,27 @@ function Segment({
             background: o.active ? "var(--surface)" : "transparent",
             border: o.active
               ? "1px solid var(--border-strong)"
-              : "1px solid transparent",
+              : o.hint === "auto"
+                ? "1px solid var(--accent-line)"
+                : "1px solid transparent",
             borderRadius: 6,
-            color: o.active ? "var(--fg)" : "var(--muted)",
+            color: o.active
+              ? "var(--fg)"
+              : o.hint === "auto"
+                ? "var(--accent)"
+                : "var(--muted)",
             fontSize: 12.5,
             justifyContent: "center",
             cursor: "pointer",
             fontFamily: "inherit",
+            position: "relative",
           }}
         >
           {o.icon && <Ico name={o.icon} size={13} />}
           <span>{o.label}</span>
+          {o.hint === "auto" && !o.active && (
+            <Ico name="sparkles" size={11} />
+          )}
         </button>
       ))}
     </div>
