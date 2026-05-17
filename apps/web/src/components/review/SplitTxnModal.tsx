@@ -37,11 +37,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Ico } from "@/components/Ico";
 import { fmtInr } from "@/lib/format";
-import type { SplitQueueRow } from "@/lib/review-repo";
+import type {
+  ReviewTransactionDetail,
+  SplitQueueRow,
+} from "@/lib/review-repo";
 import {
   updateTransaction,
   applyMerchantRule,
   countOtherUnreviewedForMerchant,
+  getTransactionDetailForSplit,
 } from "@/app/review/actions";
 
 export function SplitTxnModal({
@@ -89,6 +93,31 @@ export function SplitTxnModal({
 
   const [otherCount, setOtherCount] = useState(0);
   const [applyRule, setApplyRule] = useState(true);
+
+  // Detail-pane state. Default closed — the modal stays narrow and
+  // focused on the split decision. Click on the txn header card
+  // (counterparty + amount block) toggles open; we lazy-fetch the
+  // full ReviewTransactionDetail then. Cached per-row so re-opening
+  // is instant.
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detail, setDetail] = useState<ReviewTransactionDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  useEffect(() => {
+    // Reset detail cache when the row changes; refetch only if the
+    // pane is currently open.
+    setDetail(null);
+    if (!detailOpen) return;
+    let cancelled = false;
+    setDetailLoading(true);
+    getTransactionDetailForSplit(row.id).then((d) => {
+      if (cancelled) return;
+      setDetail(d);
+      setDetailLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [row.id, detailOpen]);
 
   // Category-change detection. The queue is sorted by category so
   // arrow-keying walks through same-category rows. When the category
@@ -264,12 +293,16 @@ export function SplitTxnModal({
           className="surface"
           style={{
             width: "100%",
-            maxWidth: 640,
+            // Modal grows when the detail pane is open so the form
+            // doesn't shrink. 640 stays the form's width — the extra
+            // ~420px houses the detail pane.
+            maxWidth: detailOpen ? 1060 : 640,
             maxHeight: "90vh",
             overflow: "hidden",
             display: "flex",
             flexDirection: "column",
             boxShadow: "0 24px 80px rgba(0,0,0,0.55)",
+            transition: "max-width 240ms cubic-bezier(0.16, 1, 0.3, 1)",
           }}
         >
           {/* Header */}
@@ -375,16 +408,70 @@ export function SplitTxnModal({
             </div>
           </div>
 
-          {/* Body */}
-          <div style={{ overflowY: "auto", padding: "18px 22px", display: "flex", flexDirection: "column", gap: 18 }}>
-            {/* Counterparty + amount */}
-            <div>
-              <h2
-                className="h1"
-                style={{ fontSize: 26, letterSpacing: "-0.01em" }}
+          {/* Body — two-pane when detail is open. Left: existing form.
+              Right: detail pane (raw narration, account, sources, etc). */}
+          <div
+            style={{
+              flex: 1,
+              minHeight: 0,
+              display: "flex",
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                flex: detailOpen ? "0 0 640px" : "1 1 auto",
+                overflowY: "auto",
+                padding: "18px 22px",
+                display: "flex",
+                flexDirection: "column",
+                gap: 18,
+                minWidth: 0,
+              }}
+            >
+            {/* Counterparty + amount — clickable to toggle the detail pane */}
+            <button
+              type="button"
+              onClick={() => setDetailOpen((v) => !v)}
+              aria-expanded={detailOpen}
+              title={
+                detailOpen
+                  ? "Close transaction detail"
+                  : "Click for raw bank narration, account, source info"
+              }
+              className="txn-header-clickable"
+              style={{
+                display: "block",
+                width: "100%",
+                textAlign: "left",
+                background: "transparent",
+                border: "1px solid transparent",
+                borderRadius: 10,
+                padding: "8px 10px",
+                margin: "-8px -10px",
+                cursor: "pointer",
+                color: "inherit",
+                fontFamily: "inherit",
+                transition:
+                  "background 180ms var(--ease-out), border-color 180ms var(--ease-out)",
+              }}
+            >
+              <div
+                className="flex items-center"
+                style={{ gap: 8 }}
               >
-                {row.counterparty}
-              </h2>
+                <h2
+                  className="h1"
+                  style={{ fontSize: 26, letterSpacing: "-0.01em", flex: 1, minWidth: 0 }}
+                >
+                  {row.counterparty}
+                </h2>
+                <Ico
+                  name={detailOpen ? "chevron-right" : "more"}
+                  size={14}
+                  className="muted-2"
+                />
+              </div>
               <div className="muted small" style={{ marginTop: 4 }}>
                 {row.category ?? "Uncategorized"}
                 {row.recurrence && row.recurrence !== "one_time" && (
@@ -408,7 +495,7 @@ export function SplitTxnModal({
                 {row.direction === "debit" ? "−" : "+"}
                 {fmtInr(row.amount)}
               </div>
-            </div>
+            </button>
 
             {/* Suggested split (only when we have a person target + not already split) */}
             {row.suggestedSplitWith && !split && (
@@ -645,6 +732,32 @@ export function SplitTxnModal({
                 {err}
               </div>
             )}
+            </div>
+
+            {/* Right pane — detail */}
+            {detailOpen && (
+              <motion.aside
+                initial={{ opacity: 0, x: 12 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 12 }}
+                transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+                style={{
+                  flex: "1 1 auto",
+                  minWidth: 0,
+                  borderLeft: "1px solid var(--border)",
+                  background: "var(--surface-2)",
+                  overflowY: "auto",
+                  padding: "18px 22px",
+                }}
+              >
+                <DetailPane
+                  row={row}
+                  detail={detail}
+                  loading={detailLoading}
+                  onClose={() => setDetailOpen(false)}
+                />
+              </motion.aside>
+            )}
           </div>
 
           {/* Footer */}
@@ -692,4 +805,236 @@ function fmtDate(iso: string): string {
     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
   ];
   return `${d} ${months[m - 1]} ${y}`;
+}
+
+/**
+ * Side detail pane — opens when the user clicks the txn header card
+ * in SplitTxnModal. Surfaces the things the user can't infer from
+ * the headline alone but commonly wants while deciding "should I
+ * split this":
+ *
+ *   - Raw bank narration (the verbatim string before normalization)
+ *   - UTR / ref no for cross-checking with bank/UPI app
+ *   - Account this debit came from (bank + last4)
+ *   - Source extractors that observed this txn (which kind of
+ *     statement / email / OCR contributed)
+ *   - Counterparty kind (person / vpa / bill / named)
+ *   - Notes the user previously left
+ *   - Attached files (Zepto invoice PDFs, OCR'd receipts, etc.)
+ *
+ * Lazily-fetched: SplitTxnModal calls getTransactionDetailForSplit
+ * on first open. Shows a loading state while the fetch is in flight.
+ */
+function DetailPane({
+  row,
+  detail,
+  loading,
+  onClose,
+}: {
+  row: SplitQueueRow;
+  detail: ReviewTransactionDetail | null;
+  loading: boolean;
+  onClose: () => void;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <header
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+        }}
+      >
+        <Ico name="more" size={14} className="muted" />
+        <span className="eyebrow" style={{ flex: 1 }}>
+          Transaction detail
+        </span>
+        <button
+          type="button"
+          className="btn btn-sm ghost"
+          onClick={onClose}
+          aria-label="Close detail pane"
+          style={{ padding: "2px 8px" }}
+        >
+          <Ico name="x" size={12} />
+        </button>
+      </header>
+
+      {loading && (
+        <div className="small muted">Loading…</div>
+      )}
+
+      {!loading && !detail && (
+        <div className="small muted">
+          Couldn&rsquo;t fetch detail. The txn may have been removed.
+        </div>
+      )}
+
+      {detail && (
+        <>
+          <Field label="Bank narration">
+            <span
+              className="mono"
+              style={{
+                fontSize: 12,
+                color: "var(--fg-2)",
+                wordBreak: "break-word",
+              }}
+            >
+              {detail.narration ?? "—"}
+            </span>
+          </Field>
+
+          <Field label="From account">
+            <span style={{ fontSize: 13, color: "var(--fg)" }}>
+              {detail.account.bank} {detail.account.type}
+            </span>
+            <span
+              className="mono"
+              style={{
+                marginLeft: 6,
+                fontSize: 12,
+                color: "var(--muted-2)",
+              }}
+            >
+              ···{detail.account.last4}
+            </span>
+          </Field>
+
+          {detail.refNo && (
+            <Field label="UTR / Ref">
+              <span
+                className="mono"
+                style={{ fontSize: 12, color: "var(--fg-2)" }}
+              >
+                {detail.refNo}
+              </span>
+            </Field>
+          )}
+
+          <Field label="Counterparty kind">
+            <span style={{ fontSize: 13, color: "var(--fg-2)" }}>
+              {detail.counterpartyKind ?? "unknown"}
+              {detail.personId && (
+                <span style={{ color: "var(--muted-2)", marginLeft: 6 }}>
+                  · person id <span className="mono">{detail.personId}</span>
+                </span>
+              )}
+            </span>
+          </Field>
+
+          {detail.sources.length > 0 && (
+            <Field label={`Sources · ${detail.sources.length}`}>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 5,
+                  marginTop: 4,
+                }}
+              >
+                {detail.sources.map((s, i) => (
+                  <span
+                    key={`${s.sourceType}-${i}`}
+                    className="chip chip-sm"
+                    style={{
+                      fontSize: 11,
+                      background: "var(--surface)",
+                      borderColor: "var(--border)",
+                      color: "var(--fg-2)",
+                    }}
+                  >
+                    {s.sourceType}
+                  </span>
+                ))}
+              </div>
+            </Field>
+          )}
+
+          {detail.attachedFiles.length > 0 && (
+            <Field label={`Attached · ${detail.attachedFiles.length}`}>
+              <div className="flex flex-col" style={{ gap: 4 }}>
+                {detail.attachedFiles.map((f, i) => (
+                  <span
+                    key={`${f.sourceType}-${i}`}
+                    className="mono"
+                    style={{
+                      fontSize: 11,
+                      color: "var(--muted)",
+                      wordBreak: "break-all",
+                    }}
+                  >
+                    <Ico name="paperclip" size={11} /> {f.path.split("/").pop()}
+                  </span>
+                ))}
+              </div>
+            </Field>
+          )}
+
+          {detail.notes && (
+            <Field label="Notes">
+              <span
+                style={{
+                  fontSize: 12.5,
+                  color: "var(--fg-2)",
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                }}
+              >
+                {detail.notes}
+              </span>
+            </Field>
+          )}
+
+          {detail.inferredLocation && (
+            <Field label="Inferred location">
+              <span
+                style={{
+                  fontSize: 12.5,
+                  color: "var(--fg-2)",
+                }}
+              >
+                {detail.inferredLocation.placeName ?? "—"}
+                {detail.inferredLocation.placeCategory && (
+                  <span style={{ color: "var(--muted-2)", marginLeft: 6 }}>
+                    · {detail.inferredLocation.placeCategory}
+                  </span>
+                )}
+              </span>
+            </Field>
+          )}
+
+          {row.personId && detail.counterpartyKind === "person" && (
+            <a
+              href={`/friends/${row.personId}`}
+              className="btn btn-sm outline"
+              style={{ marginTop: 6, justifyContent: "center" }}
+            >
+              <Ico name="users" size={13} /> Open Friends ledger
+            </a>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      <span
+        className="eyebrow"
+        style={{ fontSize: 10.5, letterSpacing: "0.05em" }}
+      >
+        {label}
+      </span>
+      <div>{children}</div>
+    </div>
+  );
 }

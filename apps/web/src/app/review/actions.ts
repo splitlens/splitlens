@@ -21,6 +21,30 @@ import {
   VisionUnavailableError,
 } from "@splitlens/ocr";
 import { extractCounterpartyFromNarration } from "@/lib/narration";
+import {
+  getTransactionForReview,
+  type ReviewTransactionDetail,
+} from "@/lib/review-repo";
+
+// ============================================================================
+// Detail fetchers — used by client components that want the full per-txn
+// payload on demand (not just the lightweight queue-row data).
+// ============================================================================
+
+/**
+ * Server-action wrapper around getTransactionForReview so the
+ * /review/split SplitTxnModal can lazily load the full detail when
+ * the user clicks the txn-header card to open the side panel.
+ *
+ * Returns null when the txn doesn't exist or was deleted between
+ * queue load and click — UI should fall back gracefully.
+ */
+export async function getTransactionDetailForSplit(
+  txnId: number,
+): Promise<ReviewTransactionDetail | null> {
+  if (!Number.isInteger(txnId) || txnId <= 0) return null;
+  return getTransactionForReview(txnId);
+}
 
 // ============================================================================
 // Field edits — counterparty / category / narration / notes / person
