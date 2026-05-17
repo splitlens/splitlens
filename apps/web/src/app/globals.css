@@ -234,7 +234,10 @@ a {
 .scrubber-month-bar {
   flex-shrink: 0;
   width: 56px;
-  padding: 6px 4px 5px;
+  /* No top padding — the bar must start at the very top of the cell so
+     its bottom edge aligns with the day-by-day chart's bar bottoms (both
+     rows then share a single baseline). */
+  padding: 0 4px 5px;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
@@ -273,7 +276,9 @@ a {
 
 .scrubber-month-bar > .bar-area {
   width: 100%;
-  height: 36px;
+  /* 32px to match the day-by-day chart container height; ensures the
+     two rows of bars resolve to the same baseline Y. */
+  height: 32px;
   display: flex;
   align-items: flex-end;
   justify-content: center;

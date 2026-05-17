@@ -1135,9 +1135,9 @@ function MonthStrip({
                   aria-pressed={active ? "true" : "false"}
                   aria-label={`${MONTH_SHORT[mo.month - 1]} ${mo.year}, ${mo.count} transactions`}
                 >
-                  <span className="bar-count">
-                    {mo.count.toLocaleString()}
-                  </span>
+                  {/* Bar sits at the top of the cell so its bottom edge
+                       aligns with the day-by-day chart's bar bottoms. The
+                       count, label, and unreviewed dot then stack below. */}
                   <span className="bar-area">
                     <span
                       className="bar"
@@ -1145,6 +1145,9 @@ function MonthStrip({
                         height: `${Math.max(8, intensity * 100)}%`,
                       }}
                     />
+                  </span>
+                  <span className="bar-count">
+                    {mo.count.toLocaleString()}
                   </span>
                   <span className="bar-label">
                     {MONTH_SHORT[mo.month - 1]} ’{String(mo.year).slice(-2)}
