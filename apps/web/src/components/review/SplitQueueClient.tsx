@@ -369,8 +369,20 @@ export function SplitQueueClient({
               Nothing to split in this slice.
             </div>
             <div className="muted small">
-              No split candidates match the current filter. Try widening
-              the range or clearing chips above.
+              {filteredRows.length === 0 ? (
+                <>
+                  No txns match the current filter. Try widening the
+                  range or clearing chips above.
+                </>
+              ) : (
+                <>
+                  {filteredRows.length.toLocaleString()} txn
+                  {filteredRows.length === 1 ? "" : "s"} match the
+                  filter, but they&rsquo;re all either already split
+                  or marked reviewed-as-personal. Open one from the
+                  category view if you want to retroactively split it.
+                </>
+              )}
             </div>
           </div>
         )}
@@ -400,8 +412,16 @@ export function SplitQueueClient({
         )}
         {largeRows.length > 0 && (
           <Section
-            title={`Large expenses · ≥ ${fmtInr(largeThreshold)}`}
-            hint="Sizable un-reviewed txns. Most likely candidates for splitting with someone."
+            title={
+              largeThreshold > 0
+                ? `Large expenses · ≥ ${fmtInr(largeThreshold)}`
+                : "Other un-reviewed"
+            }
+            hint={
+              largeThreshold > 0
+                ? "Sizable un-reviewed txns. Most likely candidates for splitting with someone."
+                : "Every other un-reviewed counterparty txn in this slice — pick the ones you split."
+            }
             count={largeRows.length}
             tone="warn"
           >

@@ -50,7 +50,14 @@ function readInt(v: string | string[] | undefined): number | null {
   return Number.isInteger(n) ? n : null;
 }
 
-const LARGE_THRESHOLD = 1000;
+// Threshold for the "Other un-reviewed" section. We used to gate this
+// at ₹1,000 so the queue only surfaced sizable candidates, but it hid
+// smaller-but-still-splittable txns the user wanted to see (e.g. a
+// ₹400 dinner shared with a friend). Set to 0 = no amount gate. The
+// queue's other criteria (un-reviewed + un-split + has a counterparty)
+// still keep the queue from drowning in self-transfers and reviewed
+// txns.
+const LARGE_THRESHOLD = 0;
 
 export default async function SplitReviewPage({ searchParams }: PageProps) {
   // Same URL-state schema as /review/category so filter chips, range
