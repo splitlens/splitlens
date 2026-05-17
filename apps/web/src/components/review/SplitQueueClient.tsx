@@ -1,27 +1,47 @@
 "use client";
 
 /**
- * The client-side surface for /review/split. Renders the queue as
- * three sections and owns the open-modal state for SplitTxnModal.
+ * Client-side surface for /review/split. Same client-side filtering
+ * architecture as /review/category — server ships the whole ledger
+ * once; we filter + categorize in-browser on every range/chip click
+ * via useMemo, so the queue updates on the same frame as the click.
  *
- * Lightweight by design — the queue is a triage list, not a deep
- * analytical view. The actual split decisions happen in the modal;
- * heavier per-person ledger work lives at /friends/[personId].
+ * Renders the shared filter chrome (Scrubber + FilterRow + SearchBar)
+ * at the top, then the queue itself as three sections (Persons /
+ * Recurring / Large) below. Per-row click opens SplitTxnModal.
  */
 import Link from "next/link";
-import { useCallback, useMemo, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useTransition,
+} from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import { Ico } from "@/components/Ico";
 import { fmtInr } from "@/lib/format";
-import type { SplitQueueRow } from "@/lib/review-repo";
+import type {
+  ClientMerchantContext,
+  ClientReviewRow,
+  ReviewFilterMeta,
+  ReviewListFilter,
+  SplitQueueRow,
+} from "@/lib/review-repo";
+import {
+  applyClientFilter,
+  buildClientTimeBuckets,
+} from "@/lib/review-client";
 
+import { FilterRow, Scrubber, SearchBar } from "./ReviewLayout";
 import { SplitTxnModal } from "./SplitTxnModal";
 
 interface Props {
-  personRows: SplitQueueRow[];
-  recurringRows: SplitQueueRow[];
-  largeRows: SplitQueueRow[];
+  filter: ReviewListFilter;
+  allRows: ClientReviewRow[];
+  merchantContexts: ClientMerchantContext[];
+  meta: ReviewFilterMeta;
   people: Array<{
     id: string;
     displayName: string;
@@ -32,29 +52,196 @@ interface Props {
 }
 
 export function SplitQueueClient({
-  personRows,
-  recurringRows,
-  largeRows,
+  filter: initialFilter,
+  allRows,
+  meta,
   people,
   largeThreshold,
 }: Props) {
   const router = useRouter();
-  const [activeId, setActiveId] = useState<number | null>(null);
+  const params = useSearchParams();
   const [, startTransition] = useTransition();
 
-  // Flat list (priority-ordered) used by the modal to navigate
-  // Prev/Next without losing the queue's grouping.
+  // Local filter state — same pattern as /review/category. URL drives
+  // the initial value; subsequent changes update local state instantly
+  // and sync back to the URL on a debounced effect.
+  const [filter, setLocalFilter] = useState<ReviewListFilter>(initialFilter);
+
+  const filteredRows = useMemo(
+    () => applyClientFilter(allRows, filter),
+    [allRows, filter],
+  );
+
+  // Scrubber needs the time buckets derived from ALL rows (so the
+  // strip shows every month with data, not just the currently-filtered
+  // ones — same as /review/category).
+  const buckets = useMemo(
+    () => buildClientTimeBuckets(allRows, filter),
+    [allRows, filter],
+  );
+
+  // Categorize the filtered rows into the three split-queue sections.
+  // Ported from the server-side SQL `getSplitQueueRows` so we can run
+  // it on the filtered slice without a round-trip. Same priority order
+  // (person > recurring > large) and the same de-dup rule (a row is
+  // tagged once with its strongest reason).
+  const peopleByPersonId = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of people) m.set(p.id, p.displayName);
+    return m;
+  }, [people]);
+
+  const { personRows, recurringRows, largeRows } = useMemo(() => {
+    const personRows: SplitQueueRow[] = [];
+    const recurringRows: SplitQueueRow[] = [];
+    const largeRows: SplitQueueRow[] = [];
+    for (const r of filteredRows) {
+      if (r.reviewed) continue;
+      if (!r.counterparty || r.counterparty === "") continue;
+
+      const isPersonKind = r.counterpartyKind === "person";
+      const isUnsplit = (r.shareCount ?? 1) <= 1;
+      const isLarge = r.amount >= largeThreshold;
+      const isRecurring =
+        r.recurrence === "monthly" ||
+        r.recurrence === "weekly" ||
+        r.recurrence === "quarterly";
+      const isRecurringWithPerson = isRecurring && isPersonKind;
+
+      const matches =
+        (isPersonKind && isUnsplit) || isLarge || isRecurringWithPerson;
+      if (!matches) continue;
+
+      // Priority: person > recurring > large.
+      let reason: SplitQueueRow["reason"];
+      if (isPersonKind && isUnsplit && !isRecurringWithPerson) {
+        reason = "person";
+      } else if (isRecurringWithPerson) {
+        reason = "recurring";
+      } else {
+        reason = "large";
+      }
+
+      const suggestedSplitWith =
+        r.personId && peopleByPersonId.get(r.personId)
+          ? peopleByPersonId.get(r.personId)!
+          : null;
+
+      const queueRow: SplitQueueRow = {
+        id: r.id,
+        txnDate: r.txnDate,
+        txnTime: r.txnTime,
+        amount: r.amount,
+        direction: r.direction,
+        counterparty: r.counterparty,
+        counterpartyKind: r.counterpartyKind,
+        personId: r.personId,
+        category: r.category,
+        recurrence: r.recurrence,
+        reason,
+        suggestedSplitWith,
+      };
+
+      if (reason === "person") personRows.push(queueRow);
+      else if (reason === "recurring") recurringRows.push(queueRow);
+      else largeRows.push(queueRow);
+    }
+    // Sort each section by date desc.
+    const sortDesc = (a: SplitQueueRow, b: SplitQueueRow) =>
+      b.txnDate.localeCompare(a.txnDate) ||
+      (b.txnTime ?? "").localeCompare(a.txnTime ?? "");
+    personRows.sort(sortDesc);
+    recurringRows.sort(sortDesc);
+    largeRows.sort(sortDesc);
+    return { personRows, recurringRows, largeRows };
+  }, [filteredRows, largeThreshold, peopleByPersonId]);
+
   const flat = useMemo(
     () => [...personRows, ...recurringRows, ...largeRows],
     [personRows, recurringRows, largeRows],
   );
 
+  // setFilter: same shape as /review/category's setFilter so the
+  // shared FilterRow + Scrubber + SearchBar work unchanged.
+  const setFilter = useCallback(
+    (patch: Partial<ReviewListFilter & { unreviewed: boolean }>) => {
+      setLocalFilter((prev) => {
+        const next: ReviewListFilter = { ...prev };
+        if ("from" in patch) next.from = patch.from ?? null;
+        if ("to" in patch) next.to = patch.to ?? null;
+        if ("category" in patch) next.category = patch.category ?? null;
+        if ("unreviewedOnly" in patch)
+          next.unreviewedOnly = !!patch.unreviewedOnly;
+        if ("unreviewed" in patch) next.unreviewedOnly = !!patch.unreviewed;
+        if ("personId" in patch) next.personId = patch.personId ?? null;
+        if ("accountId" in patch) next.accountId = patch.accountId ?? null;
+        if ("q" in patch) next.q = patch.q ?? null;
+        if ("sort" in patch) next.sort = patch.sort ?? undefined;
+        if ("timeOfDay" in patch) next.timeOfDay = patch.timeOfDay ?? null;
+        if ("shareStatus" in patch) next.shareStatus = patch.shareStatus ?? null;
+        if ("recurrenceClass" in patch)
+          next.recurrenceClass = patch.recurrenceClass ?? null;
+        return next;
+      });
+    },
+    [],
+  );
+
+  // Debounced URL sync so back/forward + shareable links still work.
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      const next = new URLSearchParams(params?.toString() ?? "");
+      const sync = (key: string, val: string | null | undefined) => {
+        if (val == null || val === "") next.delete(key);
+        else next.set(key, val);
+      };
+      sync("from", filter.from ?? null);
+      sync("to", filter.to ?? null);
+      sync("category", filter.category ?? null);
+      sync("unreviewed", filter.unreviewedOnly ? "true" : null);
+      sync("personId", filter.personId ?? null);
+      sync(
+        "accountId",
+        filter.accountId != null ? String(filter.accountId) : null,
+      );
+      sync("q", filter.q ?? null);
+      sync("sort", filter.sort ?? null);
+      sync("tod", filter.timeOfDay ?? null);
+      sync("share", filter.shareStatus ?? null);
+      sync("rec", filter.recurrenceClass ?? null);
+      const nextStr = next.toString();
+      const curStr = params?.toString() ?? "";
+      if (nextStr !== curStr) {
+        router.replace(`/review/split?${nextStr}`, { scroll: false });
+      }
+    }, 250);
+    return () => clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter]);
+
+  // Live sum + match counts for the search/header — derived from the
+  // filtered slice, not just the queue rows.
+  const matchSum = useMemo(
+    () =>
+      filteredRows.reduce(
+        (s, r) => s + (r.direction === "debit" ? r.amount : 0),
+        0,
+      ),
+    [filteredRows],
+  );
+
+  const totalQueueOutflow = flat.reduce(
+    (s, r) => s + (r.direction === "debit" ? r.amount : 0),
+    0,
+  );
+
+  // Modal nav across the entire flat queue (regardless of section).
+  const [activeId, setActiveId] = useState<number | null>(null);
   const goPrev = useCallback(() => {
     if (activeId == null) return;
     const idx = flat.findIndex((r) => r.id === activeId);
     if (idx > 0) setActiveId(flat[idx - 1]!.id);
   }, [activeId, flat]);
-
   const goNext = useCallback(() => {
     if (activeId == null) return;
     const idx = flat.findIndex((r) => r.id === activeId);
@@ -66,37 +253,12 @@ export function SplitQueueClient({
     startTransition(() => router.refresh());
   }, [router, startTransition]);
 
-  const totalAmount = flat.reduce(
-    (s, r) => s + (r.direction === "debit" ? r.amount : 0),
-    0,
-  );
-
-  if (flat.length === 0) {
-    return (
-      <main className="flex flex-col" style={{ minHeight: "calc(100vh - 56px)" }}>
-        <div style={{ padding: "28px 40px 22px" }}>
-          <h1 className="display" style={{ fontSize: 36, margin: 0 }}>
-            Nothing waiting to split.{" "}
-            <span className="muted">You&rsquo;re square.</span>
-          </h1>
-          <p className="body" style={{ marginTop: 8, maxWidth: 640 }}>
-            We&rsquo;ll surface txns here whenever a likely-split
-            candidate shows up — person-kind transfers without a split,
-            large un-reviewed expenses (≥{" "}
-            {fmtInr(largeThreshold)}), or recurring monthly transfers to
-            people. Open the <Link href="/friends" className="accent">Friends ledger</Link> for the per-person view.
-          </p>
-        </div>
-      </main>
-    );
-  }
-
   const active = activeId != null ? flat.find((r) => r.id === activeId) ?? null : null;
 
   return (
     <main className="flex flex-col" style={{ minHeight: "calc(100vh - 56px)" }}>
       {/* Hero */}
-      <div style={{ padding: "28px 40px 18px" }}>
+      <div style={{ padding: "20px 40px 14px" }}>
         <div className="flex items-end justify-between gap-6 flex-wrap">
           <div style={{ flex: 1, minWidth: 320 }}>
             <div className="flex items-center gap-3">
@@ -110,7 +272,7 @@ export function SplitQueueClient({
                 {flat.length === 1 ? "" : "s"}
               </span>
             </div>
-            <h1 className="display" style={{ fontSize: 36, marginTop: 8 }}>
+            <h1 className="display" style={{ fontSize: 30, marginTop: 8 }}>
               {flat.length} txn{flat.length === 1 ? "" : "s"} look split-able.
               <span className="muted">
                 {" "}Decide once, settle later.
@@ -119,16 +281,10 @@ export function SplitQueueClient({
           </div>
 
           <div className="flex items-center gap-3">
-            <div
-              className="flex flex-col items-end"
-              style={{ minWidth: 160 }}
-            >
+            <div className="flex flex-col items-end" style={{ minWidth: 160 }}>
               <span className="eyebrow">Outflow in queue</span>
-              <span
-                className="num-amount debit"
-                style={{ fontSize: 22 }}
-              >
-                −{fmtInr(totalAmount)}
+              <span className="num-amount debit" style={{ fontSize: 22 }}>
+                −{fmtInr(totalQueueOutflow)}
               </span>
             </div>
             <Link href="/friends" className="btn btn-sm outline">
@@ -136,10 +292,88 @@ export function SplitQueueClient({
             </Link>
           </div>
         </div>
+
+        {/* Search */}
+        <div style={{ marginTop: 14 }}>
+          <SearchBar
+            initial={filter.q ?? ""}
+            matches={filteredRows.length}
+            sum={matchSum}
+            onSubmit={(q) => setFilter({ q: q || null })}
+          />
+        </div>
+
+        {/* Filter chips */}
+        <div style={{ marginTop: 10 }}>
+          <FilterRow
+            filter={filter}
+            buckets={buckets}
+            meta={meta}
+            totalMatching={filteredRows.length}
+            matchSum={matchSum}
+            matchAvg={
+              filteredRows.length > 0
+                ? Math.round(matchSum / filteredRows.length)
+                : 0
+            }
+            onSetFilter={setFilter}
+            onClear={(key) => {
+              if (key === "time") setFilter({ from: null, to: null });
+              else if (key === "category") setFilter({ category: null });
+              else if (key === "account") setFilter({ accountId: null });
+              else if (key === "unreviewed")
+                setFilter({ unreviewedOnly: false });
+              else if (key === "share") setFilter({ shareStatus: null });
+              else if (key === "rec") setFilter({ recurrenceClass: null });
+              else if (key === "tod") setFilter({ timeOfDay: null });
+              else if (key === "q") setFilter({ q: null });
+            }}
+            onClearAll={() =>
+              setFilter({
+                from: null,
+                to: null,
+                category: null,
+                unreviewedOnly: false,
+                personId: null,
+                accountId: null,
+                q: null,
+                timeOfDay: null,
+                shareStatus: null,
+                recurrenceClass: null,
+              })
+            }
+          />
+        </div>
       </div>
 
-      {/* Sections */}
-      <div style={{ padding: "0 40px 32px", display: "flex", flexDirection: "column", gap: 24 }}>
+      {/* Timeline scrubber — RANGE strip + DAY BY DAY chart, same as
+          /review/category. Click a month to scope the queue; click a
+          day to narrow to that single day. */}
+      <Scrubber buckets={buckets} filter={filter} onPick={setFilter} />
+
+      {/* Queue sections */}
+      <div
+        style={{
+          padding: "20px 40px 32px",
+          display: "flex",
+          flexDirection: "column",
+          gap: 20,
+        }}
+      >
+        {flat.length === 0 && (
+          <div
+            className="surface"
+            style={{ padding: 24, textAlign: "center" }}
+          >
+            <div className="display" style={{ fontSize: 22, marginBottom: 6 }}>
+              Nothing to split in this slice.
+            </div>
+            <div className="muted small">
+              No split candidates match the current filter. Try widening
+              the range or clearing chips above.
+            </div>
+          </div>
+        )}
         {personRows.length > 0 && (
           <Section
             title="Person transfers · not yet split"
@@ -250,10 +484,7 @@ function Section({
           </div>
         </div>
       </header>
-      <div
-        className="flex flex-col"
-        style={{ marginTop: 8, gap: 2 }}
-      >
+      <div className="flex flex-col" style={{ marginTop: 8, gap: 2 }}>
         {children}
       </div>
     </section>
@@ -324,10 +555,7 @@ function Row({
         >
           {row.counterparty}
         </span>
-        <span
-          className="tiny"
-          style={{ color: "var(--muted-2)" }}
-        >
+        <span className="tiny" style={{ color: "var(--muted-2)" }}>
           {row.category ?? "Uncategorized"}
           {row.recurrence && row.recurrence !== "one_time" && (
             <span style={{ marginLeft: 8, color: "var(--accent)" }}>

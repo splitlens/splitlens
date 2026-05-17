@@ -568,7 +568,7 @@ export function ReviewLayout(props: ReviewLayoutProps) {
 // SearchBar
 // ────────────────────────────────────────────────────────────────────────────
 
-function SearchBar({
+export function SearchBar({
   initial,
   matches,
   sum,
@@ -626,7 +626,7 @@ function SearchBar({
 // FilterRow — active filter chips with × dismissers + summary stat
 // ────────────────────────────────────────────────────────────────────────────
 
-function FilterRow({
+export function FilterRow({
   filter,
   buckets,
   meta,
@@ -926,7 +926,7 @@ function capitalize(s: string): string {
 // Scrubber — 8-month strip + day-of-month heatmap for the active month
 // ────────────────────────────────────────────────────────────────────────────
 
-function Scrubber({
+export function Scrubber({
   buckets,
   filter,
   onPick,
