@@ -138,12 +138,22 @@ export function SplitTxnModal({
   onNextMerchant: () => void;
   onJumpToMerchant: (name: string) => void;
 }) {
-  // Local form state — initialized from the row's current values.
+  // Local form state — initialized from the row's saved values so a
+  // re-opened transaction shows its existing split, not an empty
+  // form. Without lazy-initializing here the modal would always
+  // start in "Just me" and silently overwrite saved splits on the
+  // next save (the useEffect below re-syncs when the row changes,
+  // which catches navigation across rows).
+  //
   // Recurrence lives in the categorization modal (InboxModal at
   // /review/category), not here — splitting is about *who paid* and
   // *who owes what*, not about cadence.
-  const [sharedWith, setSharedWith] = useState<string[]>([]);
-  const [shareCount, setShareCount] = useState<number>(1);
+  const [sharedWith, setSharedWith] = useState<string[]>(
+    () => row.sharedWith ?? [],
+  );
+  const [shareCount, setShareCount] = useState<number>(
+    () => row.shareCount ?? 1,
+  );
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -335,11 +345,17 @@ export function SplitTxnModal({
     prevMerchantRef.current = merchant.name;
   }, [merchant.name]);
 
-  // Reset state whenever the txn changes (when Prev/Next swaps the
-  // row out from under us).
+  // Re-hydrate local state from the row's saved values whenever the
+  // active txn changes (Prev/Next, jump to category/merchant, etc.).
+  // The previous implementation reset to [] / 1 unconditionally,
+  // which silently erased any saved split the moment the user
+  // re-opened the txn — and then if they saved again it'd overwrite
+  // the DB with an empty split. Reading from `row.sharedWith` /
+  // `row.shareCount` makes the modal reflect what's actually
+  // persisted.
   useEffect(() => {
-    setSharedWith([]);
-    setShareCount(1);
+    setSharedWith(row.sharedWith ?? []);
+    setShareCount(row.shareCount ?? 1);
     setErr(null);
     setApplyRule(true);
     let cancelled = false;
@@ -349,6 +365,10 @@ export function SplitTxnModal({
     return () => {
       cancelled = true;
     };
+    // Deps intentionally narrow to id+counterparty so an in-flight
+    // typing session inside the modal doesn't get yanked back to the
+    // saved state on every parent re-render. Cross-row navigation
+    // flips row.id which is what re-hydrates.
   }, [row.id, row.counterparty]);
 
   const split = shareCount > 1 || sharedWith.length > 0;
