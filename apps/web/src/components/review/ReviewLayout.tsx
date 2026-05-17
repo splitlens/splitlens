@@ -17,7 +17,7 @@
  *   ?id, ?from, ?to, ?category, ?unreviewed, ?personId, ?accountId, ?q,
  *   ?sort, ?tod, ?share, ?rec
  */
-import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import type {
@@ -58,6 +58,8 @@ export interface ReviewLayoutProps {
   activeDetail: ReviewTransactionDetail | null;
   customCategories: CustomCategoryRow[];
 }
+
+const LIST_GROUP_MODE_KEY = "splitlens.review.listGroupMode";
 
 export function ReviewLayout(props: ReviewLayoutProps) {
   const router = useRouter();
@@ -156,6 +158,22 @@ export function ReviewLayout(props: ReviewLayoutProps) {
   const refresh = useCallback(() => {
     startTransition(() => router.refresh());
   }, [router, startTransition]);
+
+  // List view mode (date- vs merchant-grouped). Persisted in localStorage
+  // so the user's pick survives reloads.
+  const [listGroupMode, setListGroupMode] = useState<ListGroupMode>("date");
+  useEffect(() => {
+    const saved = window.localStorage.getItem(LIST_GROUP_MODE_KEY);
+    if (saved === "date" || saved === "merchant") setListGroupMode(saved);
+  }, []);
+  const updateGroupMode = useCallback((mode: ListGroupMode) => {
+    setListGroupMode(mode);
+    try {
+      window.localStorage.setItem(LIST_GROUP_MODE_KEY, mode);
+    } catch {
+      /* private mode, quota — best effort */
+    }
+  }, []);
 
   // Multi-row selection — client-only for now; bulk actions in the bar are
   // wired to the visible state but the persistence/action layer is a TODO.
@@ -321,15 +339,19 @@ export function ReviewLayout(props: ReviewLayoutProps) {
           minHeight: 0,
         }}
       >
-        <TxnDayList
-          rows={list.rows}
-          totalMatching={list.totalMatching}
-          activeId={drawerOpen ? activeId : null}
-          selected={selected}
-          q={filter.q ?? ""}
-          onSelectId={goToId}
-          onToggleSelected={toggleSelected}
-        />
+        <div className="flex flex-col" style={{ minHeight: 0 }}>
+          <ListGroupModeToggle mode={listGroupMode} onChange={updateGroupMode} />
+          <TxnDayList
+            rows={list.rows}
+            totalMatching={list.totalMatching}
+            activeId={drawerOpen ? activeId : null}
+            selected={selected}
+            q={filter.q ?? ""}
+            groupMode={listGroupMode}
+            onSelectId={goToId}
+            onToggleSelected={toggleSelected}
+          />
+        </div>
         <ReviewRightRail
           list={list}
           filter={filter}
@@ -983,11 +1005,20 @@ function MonthStrip({
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// TxnDayList — day-grouped rows with sticky headers
+// TxnDayList — grouped rows with sticky headers (group by date or merchant)
 // ────────────────────────────────────────────────────────────────────────────
+
+export type ListGroupMode = "date" | "merchant";
 
 interface DayGroup {
   date: string;
+  rows: ReviewListRow[];
+  debitTotal: number;
+}
+
+interface MerchantGroup {
+  /** Display name — same string the row would render in its lede. */
+  merchant: string;
   rows: ReviewListRow[];
   debitTotal: number;
 }
@@ -1008,11 +1039,43 @@ function groupByDate(rows: ReviewListRow[]): DayGroup[] {
   return order.map((d) => map.get(d)!);
 }
 
+const UNKNOWN_MERCHANT_KEY = "—";
+
+function groupByMerchant(rows: ReviewListRow[]): MerchantGroup[] {
+  const map = new Map<string, MerchantGroup>();
+  for (const r of rows) {
+    const key =
+      displayCounterparty(r.counterparty, r.narration) ?? UNKNOWN_MERCHANT_KEY;
+    let g = map.get(key);
+    if (!g) {
+      g = { merchant: key, rows: [], debitTotal: 0 };
+      map.set(key, g);
+    }
+    g.rows.push(r);
+    if (r.direction === "debit") g.debitTotal += r.amount;
+  }
+  // Most-active merchants first within the filtered window. Tie-break by
+  // debit total so two merchants with the same count surface the bigger
+  // spender first. "—" (unknown) sinks last regardless.
+  return [...map.values()].sort((a, b) => {
+    if (a.merchant === UNKNOWN_MERCHANT_KEY) return 1;
+    if (b.merchant === UNKNOWN_MERCHANT_KEY) return -1;
+    if (b.rows.length !== a.rows.length) return b.rows.length - a.rows.length;
+    return b.debitTotal - a.debitTotal;
+  });
+}
+
 function fmtDayHeader(iso: string): string {
   const [y, m, d] = iso.split("-").map(Number);
   if (!y || !m || !d) return iso;
   const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
   return `${DAY_OF_WEEK[dow]} ${d} ${MONTH_SHORT[m - 1]}`;
+}
+
+function fmtRowDate(iso: string): string {
+  const [, m, d] = iso.split("-").map(Number);
+  if (!m || !d) return iso;
+  return `${d} ${MONTH_SHORT[m - 1]}`;
 }
 
 function TxnDayList({
@@ -1021,6 +1084,7 @@ function TxnDayList({
   activeId,
   selected,
   q,
+  groupMode,
   onSelectId,
   onToggleSelected,
 }: {
@@ -1029,10 +1093,18 @@ function TxnDayList({
   activeId: number | null;
   selected: Set<number>;
   q: string;
+  groupMode: ListGroupMode;
   onSelectId: (id: number) => void;
   onToggleSelected: (id: number) => void;
 }) {
-  const groups = useMemo(() => groupByDate(rows), [rows]);
+  const dayGroups = useMemo(
+    () => (groupMode === "date" ? groupByDate(rows) : []),
+    [rows, groupMode],
+  );
+  const merchantGroups = useMemo(
+    () => (groupMode === "merchant" ? groupByMerchant(rows) : []),
+    [rows, groupMode],
+  );
 
   if (rows.length === 0) {
     return (
@@ -1051,61 +1123,62 @@ function TxnDayList({
       style={{
         overflow: "auto",
         minHeight: 0,
+        flex: 1,
         paddingTop: 16,
         paddingBottom: 80,
       }}
     >
-      {groups.map((g) => (
-        <section
-          key={g.date}
-          className="flex flex-col"
-          style={{ marginBottom: 18 }}
-        >
-          <header
-            className="flex items-baseline justify-between"
-            style={{
-              padding: "8px 14px",
-              background: "var(--bg)",
-              borderBottom: "1px solid var(--border)",
-              position: "sticky",
-              top: 0,
-              zIndex: 1,
-            }}
-          >
-            <div className="flex items-baseline gap-3">
-              <span
-                style={{
-                  fontSize: 14,
-                  fontWeight: 500,
-                  letterSpacing: "-0.005em",
-                  color: "var(--fg)",
-                }}
-              >
-                {fmtDayHeader(g.date)}
-              </span>
-              <span className="tag mono">
-                {g.rows.length} txn{g.rows.length === 1 ? "" : "s"}
-              </span>
-            </div>
-            {g.debitTotal > 0 && (
-              <span className="num-amount muted" style={{ fontSize: 14 }}>
-                −{fmtInr(g.debitTotal)}
-              </span>
-            )}
-          </header>
-          {g.rows.map((r) => (
-            <TxnRow
-              key={r.id}
-              row={r}
-              active={r.id === activeId}
-              selected={selected.has(r.id)}
-              q={q}
-              onOpen={() => onSelectId(r.id)}
-              onToggleSelect={() => onToggleSelected(r.id)}
-            />
+      {groupMode === "date"
+        ? dayGroups.map((g) => (
+            <section
+              key={g.date}
+              className="flex flex-col"
+              style={{ marginBottom: 18 }}
+            >
+              <ListGroupHeader
+                label={fmtDayHeader(g.date)}
+                count={g.rows.length}
+                debitTotal={g.debitTotal}
+              />
+              {g.rows.map((r) => (
+                <TxnRow
+                  key={r.id}
+                  row={r}
+                  active={r.id === activeId}
+                  selected={selected.has(r.id)}
+                  q={q}
+                  showDate={false}
+                  onOpen={() => onSelectId(r.id)}
+                  onToggleSelect={() => onToggleSelected(r.id)}
+                />
+              ))}
+            </section>
+          ))
+        : merchantGroups.map((g) => (
+            <section
+              key={g.merchant}
+              className="flex flex-col"
+              style={{ marginBottom: 18 }}
+            >
+              <ListGroupHeader
+                label={g.merchant}
+                count={g.rows.length}
+                debitTotal={g.debitTotal}
+              />
+              {g.rows.map((r) => (
+                <TxnRow
+                  key={r.id}
+                  row={r}
+                  active={r.id === activeId}
+                  selected={selected.has(r.id)}
+                  q={q}
+                  showDate
+                  onOpen={() => onSelectId(r.id)}
+                  onToggleSelect={() => onToggleSelected(r.id)}
+                />
+              ))}
+            </section>
           ))}
-        </section>
-      ))}
       {totalMatching > rows.length && (
         <div
           className="flex items-center justify-center small muted"
@@ -1119,11 +1192,107 @@ function TxnDayList({
   );
 }
 
+function ListGroupModeToggle({
+  mode,
+  onChange,
+}: {
+  mode: ListGroupMode;
+  onChange: (mode: ListGroupMode) => void;
+}) {
+  const opts: Array<{ id: ListGroupMode; label: string; title: string }> = [
+    { id: "date", label: "By date", title: "Group transactions by day, newest first" },
+    {
+      id: "merchant",
+      label: "By merchant",
+      title:
+        "Group by counterparty; most-frequent merchants in the filtered range first",
+    },
+  ];
+  return (
+    <div
+      role="tablist"
+      aria-label="Group transactions by"
+      className="flex items-center gap-1"
+      style={{ padding: "4px 0 8px" }}
+    >
+      {opts.map((o) => {
+        const active = o.id === mode;
+        return (
+          <button
+            key={o.id}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            title={o.title}
+            onClick={() => onChange(o.id)}
+            className={`btn btn-sm ${active ? "" : "ghost"}`}
+            style={{
+              fontSize: 12,
+              padding: "4px 10px",
+            }}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ListGroupHeader({
+  label,
+  count,
+  debitTotal,
+}: {
+  label: string;
+  count: number;
+  debitTotal: number;
+}) {
+  return (
+    <header
+      className="flex items-baseline justify-between"
+      style={{
+        padding: "8px 14px",
+        background: "var(--bg)",
+        borderBottom: "1px solid var(--border)",
+        position: "sticky",
+        top: 0,
+        zIndex: 1,
+      }}
+    >
+      <div className="flex items-baseline gap-3" style={{ minWidth: 0 }}>
+        <span
+          style={{
+            fontSize: 14,
+            fontWeight: 500,
+            letterSpacing: "-0.005em",
+            color: "var(--fg)",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {label}
+        </span>
+        <span className="tag mono">
+          {count} txn{count === 1 ? "" : "s"}
+        </span>
+      </div>
+      {debitTotal > 0 && (
+        <span className="num-amount muted" style={{ fontSize: 14 }}>
+          −{fmtInr(debitTotal)}
+        </span>
+      )}
+    </header>
+  );
+}
+
 function TxnRow({
   row,
   active,
   selected,
   q,
+  showDate,
   onOpen,
   onToggleSelect,
 }: {
@@ -1131,6 +1300,9 @@ function TxnRow({
   active: boolean;
   selected: boolean;
   q: string;
+  /** Show the date alongside the time. Used by the merchant-grouped view
+   *  where the group header is the merchant name, not the date. */
+  showDate: boolean;
   onOpen: () => void;
   onToggleSelect: () => void;
 }) {
@@ -1184,13 +1356,24 @@ function TxnRow({
         {selected && <Ico name="check" size={13} />}
       </button>
 
-      {row.txnTime && (
+      {showDate ? (
         <span
           className="mono tabular muted"
-          style={{ fontSize: 11.5, width: 38, flexShrink: 0 }}
+          style={{ fontSize: 11.5, width: 78, flexShrink: 0 }}
+          title={row.txnDate}
         >
-          {row.txnTime}
+          {fmtRowDate(row.txnDate)}
+          {row.txnTime ? ` · ${row.txnTime}` : ""}
         </span>
+      ) : (
+        row.txnTime && (
+          <span
+            className="mono tabular muted"
+            style={{ fontSize: 11.5, width: 38, flexShrink: 0 }}
+          >
+            {row.txnTime}
+          </span>
+        )
       )}
 
       <div className="flex flex-col" style={{ flex: 1, minWidth: 0, gap: 2 }}>
