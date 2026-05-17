@@ -1162,7 +1162,11 @@ function MonthStrip({
 
   return (
     <div className="flex flex-col" style={{ gap: 6, minWidth: 0, maxWidth: 520 }}>
-      <span className="eyebrow">Range</span>
+      {/* Label is "Month" — pairs with the "Year" and "<Month> · Day
+          by day" siblings as three tiers of one continuum. Used to
+          read "Range" back when this was the only horizontal strip,
+          but that's no longer the case. */}
+      <span className="eyebrow">Month</span>
       {months.length === 0 ? (
         <span className="small muted">no month data</span>
       ) : (
