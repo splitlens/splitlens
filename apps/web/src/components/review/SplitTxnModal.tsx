@@ -319,7 +319,15 @@ export function SplitTxnModal({
           >
             <span className="eyebrow eyebrow-accent">Split · {positionIdx} of {positionTotal}</span>
             <span className="muted" style={{ fontSize: 12 }}>
-              {fmtDate(row.txnDate)} · {row.counterpartyKind ?? "txn"}
+              {fmtDate(row.txnDate)}
+              {row.txnTime && (
+                <>
+                  {" · "}
+                  <span className="mono tabular">{row.txnTime}</span>
+                </>
+              )}
+              {" · "}
+              {row.counterpartyKind ?? "txn"}
             </span>
             <span style={{ flex: 1 }} />
             <button type="button" className="btn btn-sm ghost" onClick={onPrev}>
@@ -839,6 +847,50 @@ function fmtDate(iso: string): string {
 }
 
 /**
+ * Format the "when" line for the detail pane. Combines:
+ *   - day of week ("Fri")
+ *   - date ("25 Apr 2026")
+ *   - clock time when present ("14:32")
+ *   - a light period-of-day hint when time is present ("afternoon",
+ *     "late night") so the user gets a memory anchor even when they
+ *     don't recognize the exact minute.
+ */
+function fmtWhen(iso: string, time: string | null): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return iso;
+  const months = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+  ];
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const dow = days[new Date(Date.UTC(y, m - 1, d)).getUTCDay()] ?? "";
+  const datePart = `${dow} · ${d} ${months[m - 1]} ${y}`;
+  if (!time) return `${datePart}  · no clock time`;
+  return `${datePart} · ${time} ${periodOfDay(time)}`;
+}
+
+function periodOfDay(time: string): string {
+  const hh = parseInt(time.slice(0, 2), 10);
+  if (Number.isNaN(hh)) return "";
+  if (hh >= 5 && hh < 12) return "(morning)";
+  if (hh >= 12 && hh < 17) return "(afternoon)";
+  if (hh >= 17 && hh < 21) return "(evening)";
+  return "(late night)";
+}
+
+/** Human label for the days-elapsed between txn date and value date. */
+function dayGapLabel(txnDate: string, valueDate: string): string {
+  const a = new Date(txnDate + "T00:00:00Z").getTime();
+  const b = new Date(valueDate + "T00:00:00Z").getTime();
+  const days = Math.round((b - a) / 86_400_000);
+  if (days === 0) return "same day";
+  if (days === 1) return "1 day later";
+  if (days > 1) return `${days} days later`;
+  if (days === -1) return "1 day earlier";
+  return `${Math.abs(days)} days earlier`;
+}
+
+/**
  * Side detail pane — opens when the user clicks the txn header card
  * in SplitTxnModal. Surfaces the things the user can't infer from
  * the headline alone but commonly wants while deciding "should I
@@ -903,6 +955,29 @@ function DetailPane({
 
       {detail && (
         <>
+          {/* When — leads the pane because the user's first
+              recall question is "when did this happen?". Day-of-week
+              + date + clock time give the strongest memory hook,
+              especially for txns without a useful bank narration. */}
+          <Field label="When">
+            <span style={{ fontSize: 13, color: "var(--fg)" }}>
+              {fmtWhen(detail.txnDate, detail.txnTime)}
+            </span>
+            {detail.valueDate && detail.valueDate !== detail.txnDate && (
+              <span
+                className="tiny"
+                style={{
+                  color: "var(--muted-2)",
+                  display: "block",
+                  marginTop: 3,
+                }}
+              >
+                Value date: {fmtDate(detail.valueDate)} (settled{" "}
+                {dayGapLabel(detail.txnDate, detail.valueDate)})
+              </span>
+            )}
+          </Field>
+
           <Field label="Bank narration">
             <span
               className="mono"
