@@ -1329,3 +1329,502 @@ export async function getCategoryTree(): Promise<CategoryTreeLeaf[]> {
     };
   });
 }
+
+// ============================================================================
+// Merchant detail — two flavours
+// ============================================================================
+//
+// The Merchant Detail surface backs two visual registers (see
+// `docs/design/merchant-detail.md`):
+//
+//   - BUSINESS — keyed by `counterparty` (e.g. "Zepto"). Job is trend &
+//     cleanup. KPI strip + 12-month bar chart + grouped txn list.
+//   - PERSON   — keyed by `person_id` (e.g. "rahul-k"). Job is balance &
+//     settle. Big balance hero + two-column ledger.
+//
+// Both pages need a 12-month bucket of activity so the page can recompute
+// when the user scrubs the timeline window client-side. The trailing axis
+// is anchored on the latest transaction in the entire ledger (not just
+// the merchant's) so the "Sep '25" anchor is stable across merchants — it
+// matches what the user just saw on the dashboard.
+
+/** Last 12 calendar months keyed by 'YYYY-MM', oldest → newest. */
+export interface MerchantMonthAxis {
+  /** YYYY-MM */
+  ym: string;
+  /** Short month label, e.g. "Oct". */
+  m: string;
+  /** Two-digit year, e.g. 24 (for 2024). */
+  y: number;
+}
+
+/** Build the 12-month axis anchored on the latest transaction in the DB. */
+function buildMonthAxis(): MerchantMonthAxis[] {
+  const row = db().get<{ latest: string | null }>(
+    sql`SELECT max(txn_date) AS latest FROM transactions`,
+  );
+  const latest = row?.latest;
+  // Anchor on the latest txn date (fall back to today if the DB is empty).
+  const anchor = latest
+    ? new Date(latest + "T00:00:00Z")
+    : new Date();
+  // Start at the first day of the anchor month, then walk back 11 months.
+  const months: MerchantMonthAxis[] = [];
+  const monthLabels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  for (let offset = 11; offset >= 0; offset -= 1) {
+    const d = new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth() - offset, 1));
+    const year = d.getUTCFullYear();
+    const monthIdx = d.getUTCMonth();
+    months.push({
+      ym: `${year}-${String(monthIdx + 1).padStart(2, "0")}`,
+      m: monthLabels[monthIdx]!,
+      y: year % 100,
+    });
+  }
+  return months;
+}
+
+/** Per-month rollup for a single business merchant. */
+export interface MerchantBusinessMonth extends MerchantMonthAxis {
+  /** Total outflow this month at this merchant (positive rupees). */
+  v: number;
+  /** Transaction count this month. */
+  n: number;
+}
+
+/** Per-month rollup for a single person counterparty. */
+export interface MerchantPersonMonth extends MerchantMonthAxis {
+  /** Negative — you paid them this month. */
+  d: number;
+  /** Positive — they paid you this month. */
+  c: number;
+}
+
+/** One business txn row, denormalized for the merchant detail timeline. */
+export interface MerchantBusinessTxn {
+  id: number;
+  txnDate: string;
+  txnTime: string | null;
+  /** Cleaned narration the UI shows on the top line (falls back to raw). */
+  narration: string;
+  /** Original bank narration kept around so the user can still see the noise. */
+  rawNarration: string | null;
+  category: string | null;
+  /** Negative — amount paid out (rupees). */
+  amount: number;
+  account: string;
+}
+
+/** One person ledger row, denormalized for the two-column merchant view. */
+export interface MerchantPersonTxn {
+  id: number;
+  txnDate: string;
+  txnTime: string | null;
+  /** Display note (cleaned). */
+  note: string;
+  /** Optional one-line subtitle (raw narration, share hint, etc.). */
+  sub: string | null;
+  /** Negative = you paid them; positive = they paid you. */
+  amount: number;
+  /** Index in the 12-month axis (0..11), so the client can filter by range. */
+  monthIdx: number;
+  /** Inline tag — pulled from category group (Rent / Bills / etc). */
+  tag: string | null;
+  /** True when the amount is unusually large vs the person's median txn. */
+  hot: boolean;
+}
+
+export interface MerchantBusinessDetail {
+  kind: "business";
+  /** Counterparty key — also the page slug. */
+  counterparty: string;
+  /** Pretty merchant name (same as counterparty for now). */
+  displayName: string;
+  /** Top category for this merchant — drives "your other X" sibling card. */
+  topCategory: string | null;
+  /** Convenient shorthand for the icon — first letter, uppercased. */
+  initials: string;
+  /** First/last txn dates for the merchant — anchors the "since" copy. */
+  firstSeen: string;
+  lastSeen: string;
+  /** Lifetime aggregates across the whole ledger. */
+  lifetimeSum: number;
+  lifetimeCount: number;
+  /** 12 trailing months, oldest → newest. */
+  months: MerchantBusinessMonth[];
+  /** All txns for the merchant, newest → oldest. */
+  txns: MerchantBusinessTxn[];
+  /** Sibling merchants in the same top-level category (e.g. other groceries). */
+  siblings: Array<{
+    counterparty: string;
+    displayName: string;
+    initials: string;
+    sum: number;
+    count: number;
+  }>;
+}
+
+export interface MerchantPersonDetail {
+  kind: "person";
+  /** person_id — also the page slug. */
+  personId: string;
+  displayName: string;
+  relationship: string;
+  initials: string;
+  /** First/last txn dates with this person. */
+  firstSeen: string;
+  lastSeen: string;
+  /** UPI handle most commonly observed for this person (best-effort). */
+  upi: string | null;
+  /** Lifetime totals. */
+  lifetimeOut: number;
+  lifetimeIn: number;
+  /** 12 trailing months — oldest → newest. */
+  months: MerchantPersonMonth[];
+  /** Outgoing rows (you → them), newest → oldest. */
+  debits: MerchantPersonTxn[];
+  /** Incoming rows (them → you), newest → oldest. */
+  credits: MerchantPersonTxn[];
+  /** Other people you have transacted with via this person (shared groups). */
+  groups: Array<{
+    id: string;
+    title: string;
+    members: string[];
+    splits: number;
+  }>;
+}
+
+function categoryGroup(c: string | null): string {
+  if (!c) return "Other";
+  const parts = c.split(":");
+  return parts[0] ?? c;
+}
+
+/** Map a category to a short inline ledger tag (Rent / Bills / Trip / …). */
+function tagForCategory(c: string | null, note: string): string | null {
+  const n = note.toLowerCase();
+  if (n.includes("rent")) return "Rent";
+  if (n.includes("trip") || n.includes("manali") || n.includes("goa")) return "Trip";
+  if (!c) return null;
+  if (c.startsWith("Utilities:")) return "Bills";
+  if (c.startsWith("Housing:")) return "Rent";
+  if (c.startsWith("Travel:")) return "Trip";
+  if (c.startsWith("Food:")) return "Food";
+  return null;
+}
+
+/** Clean a bank narration into a short display label. */
+function cleanNarration(raw: string | null, counterparty: string | null): string {
+  if (counterparty && counterparty.trim().length > 0) {
+    // Prefer the merchant name + a stripped trailing ref if the raw has one.
+    const refMatch = raw?.match(/\b(\d{6,})\b/);
+    return refMatch ? `UPI · order #${refMatch[1]}` : `UPI · ${counterparty}`;
+  }
+  return (raw ?? "—").replace(/\s+/g, " ").trim();
+}
+
+export async function getMerchantBusinessDetail(
+  counterparty: string,
+): Promise<MerchantBusinessDetail | null> {
+  // Counterparty is user-supplied; this is a SELECT so Drizzle parameterizes
+  // it safely, but a length guard avoids absurd payloads.
+  if (!counterparty || counterparty.length > 200) return null;
+
+  const summary = db().get<{
+    n: number;
+    total_out: number | null;
+    first: string | null;
+    last: string | null;
+    top_cat: string | null;
+  }>(sql`
+    SELECT
+      count(*)                                 AS n,
+      coalesce(sum(withdrawal), 0)             AS total_out,
+      min(txn_date)                            AS first,
+      max(txn_date)                            AS last,
+      (SELECT category FROM transactions
+        WHERE counterparty = ${counterparty} AND category IS NOT NULL
+        GROUP BY category
+        ORDER BY count(*) DESC LIMIT 1)        AS top_cat
+    FROM transactions
+    WHERE counterparty = ${counterparty}
+  `);
+  if (!summary || summary.n === 0 || !summary.first || !summary.last) {
+    return null;
+  }
+
+  const monthAxis = buildMonthAxis();
+  const monthRows = db().all<{ ym: string; n: number; total_out: number | null }>(sql`
+    SELECT strftime('%Y-%m', txn_date) AS ym,
+           count(*) AS n,
+           coalesce(sum(withdrawal), 0) AS total_out
+    FROM transactions
+    WHERE counterparty = ${counterparty}
+    GROUP BY ym
+  `);
+  const byYm = new Map(monthRows.map((r) => [r.ym, r]));
+  const months: MerchantBusinessMonth[] = monthAxis.map((mo) => {
+    const hit = byYm.get(mo.ym);
+    return {
+      ...mo,
+      v: Math.round(Number(hit?.total_out ?? 0)),
+      n: hit?.n ?? 0,
+    };
+  });
+
+  const txnRows = db().all<{
+    id: number;
+    txn_date: string;
+    txn_time: string | null;
+    narration: string | null;
+    category: string | null;
+    withdrawal: number | null;
+    bank: string;
+    type: string;
+    last4: string;
+  }>(sql`
+    SELECT t.id, t.txn_date, t.txn_time, t.narration, t.category, t.withdrawal,
+           a.bank, a.type, a.last4
+    FROM transactions t
+    JOIN accounts a ON a.id = t.account_id
+    WHERE t.counterparty = ${counterparty}
+      AND t.withdrawal IS NOT NULL
+    ORDER BY t.txn_date DESC, coalesce(t.txn_time, '00:00') DESC, t.id DESC
+  `);
+  const txns: MerchantBusinessTxn[] = txnRows.map((r) => ({
+    id: r.id,
+    txnDate: r.txn_date,
+    txnTime: r.txn_time,
+    narration: cleanNarration(r.narration, counterparty),
+    rawNarration: r.narration,
+    category: r.category,
+    amount: -Math.round(Number(r.withdrawal ?? 0)),
+    account: `${r.bank} ···${r.last4}`,
+  }));
+
+  // Siblings — other counterparties in the same top-level category bucket,
+  // keyed off lifetime spend. Cheap because the OOM is in the dozens.
+  let siblings: MerchantBusinessDetail["siblings"] = [];
+  if (summary.top_cat) {
+    const group = categoryGroup(summary.top_cat);
+    const sibRows = db().all<{
+      counterparty: string;
+      sum: number | null;
+      n: number;
+    }>(sql`
+      SELECT counterparty,
+             coalesce(sum(withdrawal), 0) AS sum,
+             count(*) AS n
+      FROM transactions
+      WHERE counterparty IS NOT NULL
+        AND counterparty != ${counterparty}
+        AND category IS NOT NULL
+        AND category LIKE ${group + ":%"}
+        AND withdrawal IS NOT NULL
+      GROUP BY counterparty
+      ORDER BY sum DESC
+      LIMIT 5
+    `);
+    siblings = sibRows.map((r) => ({
+      counterparty: r.counterparty,
+      displayName: r.counterparty,
+      initials: (r.counterparty[0] ?? "·").toUpperCase(),
+      sum: Math.round(Number(r.sum ?? 0)),
+      count: r.n,
+    }));
+  }
+
+  return {
+    kind: "business",
+    counterparty,
+    displayName: counterparty,
+    topCategory: summary.top_cat,
+    initials: (counterparty[0] ?? "·").toUpperCase(),
+    firstSeen: summary.first,
+    lastSeen: summary.last,
+    lifetimeSum: Math.round(Number(summary.total_out ?? 0)),
+    lifetimeCount: summary.n,
+    months,
+    txns,
+    siblings,
+  };
+}
+
+export async function getMerchantPersonDetail(
+  personId: string,
+): Promise<MerchantPersonDetail | null> {
+  if (!/^[a-z][a-z0-9-]*$/i.test(personId)) return null;
+
+  const person = DEFAULT_PEOPLE.find((p) => p.id === personId);
+  if (!person) return null;
+
+  const summary = db().get<{
+    n: number;
+    out: number | null;
+    in_: number | null;
+    first: string | null;
+    last: string | null;
+    upi: string | null;
+  }>(sql`
+    SELECT
+      count(*)                          AS n,
+      coalesce(sum(withdrawal), 0)      AS "out",
+      coalesce(sum(deposit), 0)         AS "in_",
+      min(txn_date)                     AS first,
+      max(txn_date)                     AS last,
+      (SELECT counterparty FROM transactions
+        WHERE person_id = ${personId} AND counterparty_kind = 'vpa'
+        GROUP BY counterparty
+        ORDER BY count(*) DESC LIMIT 1) AS upi
+    FROM transactions
+    WHERE person_id = ${personId}
+  `);
+  if (!summary || summary.n === 0 || !summary.first || !summary.last) {
+    return null;
+  }
+
+  const monthAxis = buildMonthAxis();
+  const monthRows = db().all<{ ym: string; d: number | null; c: number | null }>(sql`
+    SELECT strftime('%Y-%m', txn_date) AS ym,
+           coalesce(sum(withdrawal), 0) AS d,
+           coalesce(sum(deposit), 0)    AS c
+    FROM transactions
+    WHERE person_id = ${personId}
+    GROUP BY ym
+  `);
+  const byYm = new Map(monthRows.map((r) => [r.ym, r]));
+  const months: MerchantPersonMonth[] = monthAxis.map((mo) => {
+    const hit = byYm.get(mo.ym);
+    return {
+      ...mo,
+      d: -Math.round(Number(hit?.d ?? 0)),
+      c: Math.round(Number(hit?.c ?? 0)),
+    };
+  });
+  const ymToIdx = new Map(monthAxis.map((mo, i) => [mo.ym, i]));
+
+  const txnRows = db().all<{
+    id: number;
+    txn_date: string;
+    txn_time: string | null;
+    narration: string | null;
+    category: string | null;
+    withdrawal: number | null;
+    deposit: number | null;
+  }>(sql`
+    SELECT id, txn_date, txn_time, narration, category, withdrawal, deposit
+    FROM transactions
+    WHERE person_id = ${personId}
+    ORDER BY txn_date DESC, coalesce(txn_time, '00:00') DESC, id DESC
+  `);
+
+  // Hot threshold — anything ≥ 3× the median outgoing magnitude.
+  const outgoingMags = txnRows
+    .map((r) => Number(r.withdrawal ?? 0))
+    .filter((v) => v > 0)
+    .sort((a, b) => a - b);
+  const median = outgoingMags.length === 0
+    ? 0
+    : outgoingMags[Math.floor(outgoingMags.length / 2)]!;
+  const hotThreshold = median > 0 ? median * 3 : Number.POSITIVE_INFINITY;
+
+  const debits: MerchantPersonTxn[] = [];
+  const credits: MerchantPersonTxn[] = [];
+  for (const r of txnRows) {
+    const idx = ymToIdx.get(r.txn_date.slice(0, 7)) ?? -1;
+    const note = cleanNarration(r.narration, person.displayName);
+    if (r.withdrawal != null && r.withdrawal > 0) {
+      debits.push({
+        id: r.id,
+        txnDate: r.txn_date,
+        txnTime: r.txn_time,
+        note,
+        sub: r.narration && r.narration !== note ? r.narration : null,
+        amount: -Math.round(Number(r.withdrawal)),
+        monthIdx: idx,
+        tag: tagForCategory(r.category, r.narration ?? ""),
+        hot: Number(r.withdrawal) >= hotThreshold,
+      });
+    } else if (r.deposit != null && r.deposit > 0) {
+      credits.push({
+        id: r.id,
+        txnDate: r.txn_date,
+        txnTime: r.txn_time,
+        note,
+        sub: r.narration && r.narration !== note ? r.narration : null,
+        amount: Math.round(Number(r.deposit)),
+        monthIdx: idx,
+        tag: tagForCategory(r.category, r.narration ?? ""),
+        hot: false,
+      });
+    }
+  }
+
+  // Shared groups — derived from the shared_with CSV. Each unique set of
+  // co-participants (including this person) becomes one "group".
+  const sharedRows = db().all<{ shared_with: string; n: number }>(sql`
+    SELECT shared_with, count(*) AS n
+    FROM transactions
+    WHERE shared_with IS NOT NULL
+      AND shared_with != ''
+      AND shared_with LIKE ${"%" + personId + "%"}
+    GROUP BY shared_with
+    ORDER BY n DESC
+    LIMIT 4
+  `);
+  const groups: MerchantPersonDetail["groups"] = sharedRows
+    .map((r) => {
+      const ids = r.shared_with.split(",").map((s) => s.trim()).filter(Boolean);
+      if (!ids.includes(personId)) return null;
+      const members = ids.map((id) => {
+        if (id === personId) return person.displayName;
+        const p = DEFAULT_PEOPLE.find((q) => q.id === id);
+        return p?.displayName ?? id;
+      });
+      return {
+        id: ids.slice().sort().join("+"),
+        title: members.slice(0, 3).join(" · ") + (members.length > 3 ? "…" : ""),
+        members,
+        splits: r.n,
+      };
+    })
+    .filter((g): g is NonNullable<typeof g> => g !== null);
+
+  return {
+    kind: "person",
+    personId,
+    displayName: person.displayName,
+    relationship: person.relationship,
+    initials: person.displayName
+      .split(" ")
+      .map((p) => p[0])
+      .filter(Boolean)
+      .slice(0, 2)
+      .join("")
+      .toUpperCase(),
+    firstSeen: summary.first,
+    lastSeen: summary.last,
+    upi: summary.upi,
+    lifetimeOut: Math.round(Number(summary.out ?? 0)),
+    lifetimeIn: Math.round(Number(summary.in_ ?? 0)),
+    months,
+    debits,
+    credits,
+    groups,
+  };
+}
+
+/**
+ * Best-effort resolver for the /merchants/[id] route. Tries person_id first
+ * (it's the narrow alphanumeric form), then falls back to a counterparty
+ * lookup. Returns null when nothing matches so the route can 404.
+ */
+export async function resolveMerchant(
+  id: string,
+): Promise<MerchantBusinessDetail | MerchantPersonDetail | null> {
+  if (/^[a-z][a-z0-9-]*$/i.test(id)) {
+    const person = await getMerchantPersonDetail(id);
+    if (person) return person;
+  }
+  return getMerchantBusinessDetail(id);
+}
