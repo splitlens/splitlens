@@ -940,11 +940,34 @@ export function Scrubber({
 }) {
   const { selectedYear, selectedMonth } = buckets;
 
-  // The month strip spans every month with activity, sorted ascending —
-  // not constrained to the selected year, so the user can still
-  // cross-jump between years from the strip alone if they want to.
-  // (Year click is the explicit drill-down; this gives a fallback path.)
-  const monthsStrip = buckets.recentMonths;
+  // Month strip data: when a year is active, narrow to that year's
+  // months only — the strip then renders Jan-Dec (or the months within
+  // that year that have data) so the user sees the selected year's
+  // distribution at a glance, not the cross-year mess. When no year is
+  // active, fall back to every month with data across history so the
+  // user can still cross-jump years without first picking one.
+  const monthsStrip = useMemo(() => {
+    if (!selectedYear) return buckets.recentMonths;
+    // Build a full Jan-Dec strip for the year. Months without data
+    // render as min-height "empty" bars so the user sees the year's
+    // shape (busy Feb, quiet Mar, etc.) without gaps tricking them
+    // into thinking data is missing.
+    const byMonth = new Map(
+      buckets.recentMonths
+        .filter((m) => m.year === selectedYear)
+        .map((m) => [m.month, m]),
+    );
+    return Array.from({ length: 12 }, (_, i) => {
+      const m = i + 1;
+      const found = byMonth.get(m);
+      return {
+        year: selectedYear,
+        month: m,
+        count: found?.count ?? 0,
+        unreviewed: found?.unreviewed ?? 0,
+      };
+    });
+  }, [buckets.recentMonths, selectedYear]);
 
   // Day heatmap target: the explicitly selected month if any, otherwise the
   // most-recent month in `recentMonths` so the strip is always live.
