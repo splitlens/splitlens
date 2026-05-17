@@ -123,11 +123,40 @@ export function SplitTxnModal({
   // name in the strip or pressing C. Always closed on mount so the
   // initial frame is clean.
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Highlighted row in the picker — what Enter would select. Starts
+  // on the active category each time the picker opens, then ↑/↓
+  // moves it independently of the underlying txn's category. Split
+  // from `categoryNavIdx` so the "currently active" row (check mark)
+  // stays anchored on the txn's actual category while the keyboard
+  // highlight roams.
+  const [pickerIndex, setPickerIndex] = useState(0);
+  const pickerListRef = useRef<HTMLDivElement | null>(null);
   // Close the picker whenever the row changes — otherwise it floats
   // over the wrong category after [/]/arrow nav.
   useEffect(() => {
     setPickerOpen(false);
   }, [row.id]);
+  // Sync the keyboard highlight to the active category each time the
+  // picker opens. Clamp to [0, len-1] in case the queue rebuilt while
+  // the modal was alive.
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const start = Math.max(0, Math.min(categoryNav.length - 1, categoryNavIdx));
+    setPickerIndex(start < 0 ? 0 : start);
+  }, [pickerOpen, categoryNavIdx, categoryNav.length]);
+  // Scroll the highlighted row into view inside the (scrollable)
+  // picker container. `block: "nearest"` keeps the highlight inside
+  // the viewport without yanking it to center, so consecutive ↑/↓
+  // feels like a smooth scroll along the list edge.
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const list = pickerListRef.current;
+    if (!list) return;
+    const item = list.querySelector<HTMLElement>(
+      `[data-picker-idx="${pickerIndex}"]`,
+    );
+    if (item) item.scrollIntoView({ block: "nearest" });
+  }, [pickerOpen, pickerIndex]);
   const [detail, setDetail] = useState<ReviewTransactionDetail | null>(null);
   const [recall, setRecall] = useState<MerchantRecallContext | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -262,30 +291,99 @@ export function SplitTxnModal({
     ],
   );
 
-  // Keyboard map:
-  //   Enter       → save & advance
-  //   Esc         → close (or close picker first)
-  //   ←/→         → prev/next txn
-  //   /           → skip (same as →)
-  //   Space       → toggle detail pane
-  //   [ / ]       → prev/next category jump
-  //   C           → toggle category picker
-  //   S           → apply suggested split
-  //   J           → just me
+  // Keyboard map.
+  //   Default (picker closed):
+  //     Enter       → save & advance
+  //     Esc         → close modal
+  //     ←/→         → prev/next txn
+  //     /           → skip (same as →)
+  //     Space       → toggle detail pane
+  //     [ / ]       → prev/next category jump
+  //     C           → open category picker
+  //     S           → apply suggested split
+  //     J           → just me
+  //   Picker mode (picker open) — list-nav focus:
+  //     ↑ / ↓       → move highlight
+  //     Home/End    → first/last category
+  //     Enter       → jump to highlighted category + close
+  //     Esc / C     → close picker
+  //     all others  → trapped (don't change the underlying txn while
+  //                   the user is mid-pick)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // Don't steal keys when the user is typing in an input.
       const tag = (e.target as HTMLElement | null)?.tagName?.toLowerCase();
       if (tag === "input" || tag === "textarea") return;
+
+      // Picker has its own keyboard model. Handle it first and bail
+      // so global shortcuts don't fire under the open menu.
+      if (pickerOpen) {
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setPickerIndex((i) => Math.max(0, i - 1));
+          return;
+        }
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setPickerIndex((i) =>
+            Math.min(categoryNav.length - 1, i + 1),
+          );
+          return;
+        }
+        if (e.key === "Home") {
+          e.preventDefault();
+          setPickerIndex(0);
+          return;
+        }
+        if (e.key === "End") {
+          e.preventDefault();
+          setPickerIndex(Math.max(0, categoryNav.length - 1));
+          return;
+        }
+        if (e.key === "Enter") {
+          e.preventDefault();
+          const target = categoryNav[pickerIndex];
+          if (target) onJumpToCategory(target.name);
+          setPickerOpen(false);
+          return;
+        }
+        if (
+          e.key === "Escape" ||
+          e.key === "c" ||
+          e.key === "C"
+        ) {
+          e.preventDefault();
+          setPickerOpen(false);
+          return;
+        }
+        // Trap any other key that would normally mutate the txn or
+        // navigate away — the user is browsing the menu, not the
+        // queue.
+        if (
+          e.key === "ArrowLeft" ||
+          e.key === "ArrowRight" ||
+          e.key === " " ||
+          e.code === "Space" ||
+          e.key === "[" ||
+          e.key === "]" ||
+          e.key === "/" ||
+          e.key === "s" ||
+          e.key === "S" ||
+          e.key === "j" ||
+          e.key === "J"
+        ) {
+          e.preventDefault();
+          return;
+        }
+        return;
+      }
+
       if (e.key === "Enter") {
         e.preventDefault();
         void save(true);
       } else if (e.key === "Escape") {
         e.preventDefault();
-        // Esc collapses the picker first — keeps a single Esc from
-        // closing the whole modal when the user is mid-pick.
-        if (pickerOpen) setPickerOpen(false);
-        else onClose();
+        onClose();
       } else if (e.key === "ArrowLeft") {
         e.preventDefault();
         onPrev();
@@ -305,7 +403,7 @@ export function SplitTxnModal({
         onNextCategory();
       } else if (e.key === "c" || e.key === "C") {
         e.preventDefault();
-        setPickerOpen((v) => !v);
+        setPickerOpen(true);
       } else if (e.key === "s" || e.key === "S") {
         e.preventDefault();
         applySuggested();
@@ -323,9 +421,12 @@ export function SplitTxnModal({
     onNext,
     onPrevCategory,
     onNextCategory,
+    onJumpToCategory,
     applySuggested,
     setJustMe,
     pickerOpen,
+    pickerIndex,
+    categoryNav,
   ]);
 
   const sortedPeople = useMemo(
@@ -574,13 +675,20 @@ export function SplitTxnModal({
               {pickerOpen && (
                 <motion.div
                   key="cat-picker"
+                  ref={pickerListRef}
                   role="listbox"
                   aria-label="Jump to category"
+                  aria-activedescendant={
+                    categoryNav[pickerIndex]
+                      ? `cat-opt-${pickerIndex}`
+                      : undefined
+                  }
                   initial={{ opacity: 0, y: -4 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -4 }}
                   transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
                   onClick={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => e.stopPropagation()}
                   style={{
                     position: "absolute",
                     top: "calc(100% + 6px)",
@@ -602,14 +710,24 @@ export function SplitTxnModal({
                       No categories in this queue.
                     </div>
                   )}
+                  {/* Two states per row:
+                       isCurrent — the txn's actual category (check)
+                       isHighlighted — where ↑/↓ has the keyboard
+                         focus right now (accent-soft background).
+                       Splitting them keeps the "you are here" anchor
+                       stable while the keyboard highlight roams. */}
                   {categoryNav.map((c, i) => {
-                    const isActive = i === categoryNavIdx;
+                    const isCurrent = i === categoryNavIdx;
+                    const isHighlighted = i === pickerIndex;
                     return (
                       <button
                         key={c.name}
+                        id={`cat-opt-${i}`}
+                        data-picker-idx={i}
                         type="button"
                         role="option"
-                        aria-selected={isActive}
+                        aria-selected={isHighlighted}
+                        onMouseEnter={() => setPickerIndex(i)}
                         onClick={() => {
                           onJumpToCategory(c.name);
                           setPickerOpen(false);
@@ -621,20 +739,37 @@ export function SplitTxnModal({
                           alignItems: "center",
                           width: "100%",
                           padding: "8px 10px",
-                          background: isActive
+                          background: isHighlighted
                             ? "var(--accent-soft)"
                             : "transparent",
-                          border: "1px solid transparent",
+                          border: `1px solid ${
+                            isHighlighted
+                              ? "var(--accent-line)"
+                              : "transparent"
+                          }`,
                           borderRadius: 6,
-                          color: isActive ? "var(--accent)" : "var(--fg)",
+                          color: isHighlighted
+                            ? "var(--accent)"
+                            : isCurrent
+                              ? "var(--fg)"
+                              : "var(--fg)",
+                          fontWeight: isCurrent ? 500 : 400,
                           fontFamily: "inherit",
                           fontSize: 13,
                           textAlign: "left",
                           cursor: "pointer",
+                          transition:
+                            "background 100ms var(--ease-out), border-color 100ms var(--ease-out)",
                         }}
                       >
                         <span aria-hidden>
-                          {isActive && <Ico name="check" size={11} />}
+                          {isCurrent && (
+                            <Ico
+                              name="check"
+                              size={11}
+                              className={isHighlighted ? "" : "accent"}
+                            />
+                          )}
                         </span>
                         <span
                           style={{
@@ -647,7 +782,11 @@ export function SplitTxnModal({
                         </span>
                         <span
                           className="mono tabular tiny"
-                          style={{ color: "var(--muted-2)" }}
+                          style={{
+                            color: isHighlighted
+                              ? "var(--accent)"
+                              : "var(--muted-2)",
+                          }}
                         >
                           {c.count}
                         </span>
@@ -1052,7 +1191,23 @@ export function SplitTxnModal({
             }}
           >
             <span className="tiny muted" style={{ flex: 1 }}>
-              <span className="kbd">↵</span> save · <span className="kbd">S</span> suggest · <span className="kbd">J</span> just me · <span className="kbd">Space</span> detail · <span className="kbd">[</span>/<span className="kbd">]</span> cat · <span className="kbd">C</span> pick · <span className="kbd">Esc</span> close
+              {pickerOpen ? (
+                <>
+                  <span className="kbd">↑</span>/<span className="kbd">↓</span> highlight ·{" "}
+                  <span className="kbd">↵</span> jump ·{" "}
+                  <span className="kbd">Esc</span> close picker
+                </>
+              ) : (
+                <>
+                  <span className="kbd">↵</span> save ·{" "}
+                  <span className="kbd">S</span> suggest ·{" "}
+                  <span className="kbd">J</span> just me ·{" "}
+                  <span className="kbd">Space</span> detail ·{" "}
+                  <span className="kbd">[</span>/<span className="kbd">]</span> cat ·{" "}
+                  <span className="kbd">C</span> pick ·{" "}
+                  <span className="kbd">Esc</span> close
+                </>
+              )}
             </span>
             <button
               type="button"
