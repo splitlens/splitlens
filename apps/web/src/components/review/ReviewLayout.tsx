@@ -1082,12 +1082,20 @@ function MonthStrip({
       ) : (
         <div
           ref={scrollerRef}
-          className="flex items-stretch gap-1"
-          style={{
-            overflowX: "auto",
-            scrollBehavior: "smooth",
-            scrollbarWidth: "thin",
-            paddingBottom: 2,
+          className="flex items-stretch gap-1 scrubber-month-scroller"
+          onWheel={(e) => {
+            // Translate vertical mouse-wheel into horizontal scroll. A
+            // trackpad swipe with horizontal delta still uses deltaX
+            // natively; this only kicks in when the dominant axis is
+            // vertical (mouse wheel). Stops bubbling so the page
+            // doesn't scroll alongside.
+            const el = e.currentTarget;
+            const horizontalIntent = Math.abs(e.deltaX) > Math.abs(e.deltaY);
+            const overflowing = el.scrollWidth > el.clientWidth;
+            if (overflowing && !horizontalIntent && e.deltaY !== 0) {
+              el.scrollLeft += e.deltaY;
+              e.preventDefault();
+            }
           }}
         >
           {months.map((mo) => {

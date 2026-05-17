@@ -286,6 +286,29 @@ a {
   transform: scaleY(1.06);
 }
 
+/* The horizontally-scrolling container for the month tiles. Inherits
+   the app-wide hidden-scrollbar default; the scrollbar reveals on
+   hover via the universal rule so the surface stays calm at rest. */
+.scrubber-month-scroller {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+  /* Subtle inertia feel on trackpads. */
+  scroll-behavior: auto;
+  overscroll-behavior-x: contain;
+}
+/* The universal :hover scrollbar reveal is good for tall lists, but on
+   a single horizontal strip it produces an unwanted thumb under the
+   tiles. Keep the scrollbar hidden here even on hover; the user has
+   the mouse wheel + drag-to-scroll to navigate. */
+.scrubber-month-scroller::-webkit-scrollbar,
+.scrubber-month-scroller:hover::-webkit-scrollbar,
+.scrubber-month-scroller:focus::-webkit-scrollbar,
+.scrubber-month-scroller:focus-within::-webkit-scrollbar {
+  width: 0 !important;
+  height: 0 !important;
+}
+
 /* ── Modal enter animations ─────────────────────────────────── */
 
 @keyframes modal-backdrop-fade-in {
