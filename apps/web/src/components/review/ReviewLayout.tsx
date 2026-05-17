@@ -22,6 +22,8 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import type {
+  ClientMerchantContext,
+  ClientReviewRow,
   CustomCategoryRow,
   MerchantAggregate,
   ReviewListFilter,
@@ -31,6 +33,12 @@ import type {
   ReviewFilterMeta,
   TimeBuckets,
 } from "@/lib/review-repo";
+import {
+  applyClientFilter,
+  buildClientMerchantAggregates,
+  buildClientTimeBuckets,
+  buildReviewListResult,
+} from "@/lib/review-client";
 import { fmtInr } from "@/lib/format";
 import { displayCounterparty } from "@/lib/narration";
 import { categoryFromCustom, getCategory, setCustomCategoriesIndex } from "@/lib/taxonomy";
@@ -46,8 +54,11 @@ const MONTH_SHORT = [
 const DAY_OF_WEEK = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export interface ReviewLayoutProps {
+  /** Initial filter shape — used to bootstrap local state from the URL.
+   *  Subsequent filter changes are kept in client state and synced back
+   *  to the URL via a debounced effect (for shareability), but the URL
+   *  no longer drives re-renders. */
   filter: ReviewListFilter;
-  list: ReviewListResult;
   meta: ReviewFilterMeta;
   people: Array<{
     id: string;
@@ -55,13 +66,17 @@ export interface ReviewLayoutProps {
     relationship: string;
     txnCount: number;
   }>;
-  buckets: TimeBuckets;
   activeId: number | null;
   activeDetail: ReviewTransactionDetail | null;
   customCategories: CustomCategoryRow[];
-  /** Per-merchant rich aggregates for the by-merchant view (sparkline,
-   *  lifetime count, etc.). One row per merchant in the active filter. */
-  merchantAggregates: MerchantAggregate[];
+  /** The whole ledger as plain client rows. Filter/bucket/aggregate
+   *  recompute over this set in useMemo, on every click, on the same
+   *  frame. The reason filter clicks feel instant. */
+  allRows: ClientReviewRow[];
+  /** Filter-independent lifetime context per counterparty (lifetime
+   *  count + 12-month sparkline). Zipped with the in-filter slice
+   *  inside `buildClientMerchantAggregates`. */
+  merchantContexts: ClientMerchantContext[];
 }
 
 const LIST_GROUP_MODE_KEY = "splitlens.review.listGroupMode";
@@ -72,16 +87,41 @@ export function ReviewLayout(props: ReviewLayoutProps) {
   const [pending, startTransition] = useTransition();
 
   const {
-    list,
     meta,
     people,
-    buckets,
-    filter,
+    filter: initialFilter,
     activeId,
     activeDetail,
     customCategories,
-    merchantAggregates,
+    allRows,
+    merchantContexts,
   } = props;
+
+  // Local filter state. Initialized from the URL on first render, then
+  // owned by the client — every filter click updates this state and the
+  // useMemo block below recomputes the list/buckets/aggregates on the
+  // same frame, no network round-trip. The URL is sync'd back on a
+  // 250ms debounce (further down) so shareable links stay accurate.
+  const [filter, setLocalFilter] = useState<ReviewListFilter>(initialFilter);
+
+  // Pure derivations — these all run synchronously inside React's
+  // render pass. With ~5k rows this is sub-millisecond on a modern CPU.
+  const filteredRows = useMemo(
+    () => applyClientFilter(allRows, filter),
+    [allRows, filter],
+  );
+  const list = useMemo(
+    () => buildReviewListResult(allRows, filteredRows, filter),
+    [allRows, filteredRows, filter],
+  );
+  const buckets = useMemo(
+    () => buildClientTimeBuckets(allRows, filter),
+    [allRows, filter],
+  );
+  const merchantAggregates = useMemo(
+    () => buildClientMerchantAggregates(filteredRows, merchantContexts),
+    [filteredRows, merchantContexts],
+  );
 
   // Register custom categories with the global lookup so chips/dots resolve.
   const customDefs = useMemo(
@@ -105,44 +145,89 @@ export function ReviewLayout(props: ReviewLayoutProps) {
     [params, router, startTransition],
   );
 
+  /**
+   * Apply a filter patch.
+   *
+   * Two-track behavior:
+   *   1. Mutate local React state synchronously — every derived useMemo
+   *      above recomputes on the same frame, so the UI updates instantly.
+   *   2. Schedule a debounced URL sync (further down) so back/forward and
+   *      shareable links still reflect the active filter.
+   *
+   * Active txn id (`?id`) is dropped immediately — clicking a filter
+   * always exits a pinned txn, same as before.
+   */
   const setFilter = useCallback(
     (patch: Partial<ReviewListFilter & { unreviewed: boolean }>) => {
-      const next = new URLSearchParams(params?.toString() ?? "");
-      next.delete("id");
-      const map: Record<string, string | null | undefined> = {
-        from: "from" in patch ? (patch.from ?? null) : undefined,
-        to: "to" in patch ? (patch.to ?? null) : undefined,
-        category: "category" in patch ? (patch.category ?? null) : undefined,
-        unreviewed:
-          "unreviewedOnly" in patch
-            ? patch.unreviewedOnly
-              ? "true"
-              : null
-            : undefined,
-        personId: "personId" in patch ? (patch.personId ?? null) : undefined,
-        accountId:
-          "accountId" in patch
-            ? patch.accountId != null
-              ? String(patch.accountId)
-              : null
-            : undefined,
-        q: "q" in patch ? (patch.q ?? null) : undefined,
-        sort: "sort" in patch ? (patch.sort ?? null) : undefined,
-        tod: "timeOfDay" in patch ? (patch.timeOfDay ?? null) : undefined,
-        share: "shareStatus" in patch ? (patch.shareStatus ?? null) : undefined,
-        rec: "recurrenceClass" in patch ? (patch.recurrenceClass ?? null) : undefined,
-      };
-      for (const [k, v] of Object.entries(map)) {
-        if (v === undefined) continue;
-        if (v === null) next.delete(k);
-        else next.set(k, v);
-      }
-      startTransition(() => {
-        router.replace(`/review?${next.toString()}`, { scroll: false });
+      setLocalFilter((prev) => {
+        const next: ReviewListFilter = { ...prev };
+        if ("from" in patch) next.from = patch.from ?? null;
+        if ("to" in patch) next.to = patch.to ?? null;
+        if ("category" in patch) next.category = patch.category ?? null;
+        if ("unreviewedOnly" in patch)
+          next.unreviewedOnly = !!patch.unreviewedOnly;
+        if ("unreviewed" in patch) next.unreviewedOnly = !!patch.unreviewed;
+        if ("personId" in patch) next.personId = patch.personId ?? null;
+        if ("accountId" in patch)
+          next.accountId = patch.accountId ?? null;
+        if ("q" in patch) next.q = patch.q ?? null;
+        if ("sort" in patch) next.sort = patch.sort ?? undefined;
+        if ("timeOfDay" in patch)
+          next.timeOfDay = patch.timeOfDay ?? null;
+        if ("shareStatus" in patch)
+          next.shareStatus = patch.shareStatus ?? null;
+        if ("recurrenceClass" in patch)
+          next.recurrenceClass = patch.recurrenceClass ?? null;
+        return next;
       });
+      // Drop ?id immediately — clicking a filter exits any pinned txn.
+      if (params?.has("id")) {
+        const next = new URLSearchParams(params.toString());
+        next.delete("id");
+        startTransition(() => {
+          router.replace(`/review?${next.toString()}`, { scroll: false });
+        });
+      }
     },
     [params, router, startTransition],
   );
+
+  // Debounced URL sync. Whenever the local filter settles, push the new
+  // query params back to the URL so shareable links work and back/
+  // forward still navigates between filter states. The 250ms debounce
+  // means rapid clicks don't spam history entries.
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      const next = new URLSearchParams(params?.toString() ?? "");
+      const sync = (key: string, val: string | null | undefined) => {
+        if (val == null || val === "") next.delete(key);
+        else next.set(key, val);
+      };
+      sync("from", filter.from ?? null);
+      sync("to", filter.to ?? null);
+      sync("category", filter.category ?? null);
+      sync("unreviewed", filter.unreviewedOnly ? "true" : null);
+      sync("personId", filter.personId ?? null);
+      sync(
+        "accountId",
+        filter.accountId != null ? String(filter.accountId) : null,
+      );
+      sync("q", filter.q ?? null);
+      sync("sort", filter.sort ?? null);
+      sync("tod", filter.timeOfDay ?? null);
+      sync("share", filter.shareStatus ?? null);
+      sync("rec", filter.recurrenceClass ?? null);
+      const nextStr = next.toString();
+      const curStr = params?.toString() ?? "";
+      if (nextStr !== curStr) {
+        router.replace(`/review?${nextStr}`, { scroll: false });
+      }
+    }, 250);
+    return () => clearTimeout(handle);
+    // We intentionally don't depend on `params`/`router` — those would
+    // re-arm the timer on every URL update we make ourselves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter]);
 
   // When the user clicks a merchant in the leaderboard, we want the modal
   // to open straight into MerchantDetailView for that counterparty instead

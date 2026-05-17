@@ -18,12 +18,11 @@
  */
 import type { Metadata } from "next";
 import {
-  listTransactionsForReview,
   getTransactionForReview,
   getReviewFilterMeta,
-  getTimeBuckets,
   listCustomCategories,
-  getMerchantListAggregates,
+  getAllClientReviewRows,
+  getAllMerchantContexts,
   type ReviewListFilter,
 } from "@/lib/review-repo";
 import { listKnownPeople } from "../friends/actions";
@@ -79,40 +78,53 @@ export default async function ReviewPage({ searchParams }: PageProps) {
       recParam === "one_time" || recParam === "recurring" ? recParam : null,
   };
 
-  const [list, meta, people, buckets, customCategories, merchantAggregates] =
+  // /review now runs the filter pipeline on the client. The server's job
+  // is to ship the whole txn ledger + the static dropdown/lookup data
+  // once; the client recomputes filters/buckets/aggregates on every click
+  // via useMemo in ReviewLayout. The only remaining per-request server
+  // work is the active txn detail (one row, on demand).
+  const [meta, people, customCategories, allRows, merchantContexts] =
     await Promise.all([
-      listTransactionsForReview(filter),
       getReviewFilterMeta(),
       listKnownPeople(),
-      getTimeBuckets(filter),
       listCustomCategories(),
-      // Per-merchant aggregates feed the by-merchant view's rich rows
-      // (avatar, sparkline, raw narration line, last-seen, lifetime count).
-      // Same filter as the txn list so both views stay in sync.
-      getMerchantListAggregates(filter),
+      getAllClientReviewRows(),
+      getAllMerchantContexts(),
     ]);
 
-  // Pick the active row: explicit ?id wins; otherwise first unreviewed in the
-  // filtered list; otherwise the first row (empty state handled in client).
+  // Pick the active row: explicit ?id wins; otherwise first unreviewed in
+  // the matching slice; otherwise the first matching row. The matching
+  // slice is computed inline (server-side) so we land on a real row on
+  // first paint without waiting for the client filter to run.
   const requestedId = readInt(sp.id);
   let activeId: number | null = requestedId;
   if (activeId === null) {
-    const firstUnreviewed = list.rows.find((r) => !r.reviewed);
-    activeId = firstUnreviewed?.id ?? list.rows[0]?.id ?? null;
+    const matchesFilter = (r: (typeof allRows)[number]) => {
+      if (filter.from && r.txnDate < filter.from) return false;
+      if (filter.to && r.txnDate > filter.to) return false;
+      if (filter.category && r.category !== filter.category) return false;
+      if (filter.unreviewedOnly && r.reviewed) return false;
+      if (filter.personId && r.personId !== filter.personId) return false;
+      if (filter.accountId != null && r.accountId !== filter.accountId)
+        return false;
+      return true;
+    };
+    const matching = allRows.filter(matchesFilter);
+    const firstUnreviewed = matching.find((r) => !r.reviewed);
+    activeId = firstUnreviewed?.id ?? matching[0]?.id ?? null;
   }
   const detail = activeId != null ? await getTransactionForReview(activeId) : null;
 
   return (
     <ReviewLayout
       filter={filter}
-      list={list}
       meta={meta}
       people={people}
-      buckets={buckets}
       activeId={activeId}
       activeDetail={detail}
       customCategories={customCategories}
-      merchantAggregates={merchantAggregates}
+      allRows={allRows}
+      merchantContexts={merchantContexts}
     />
   );
 }

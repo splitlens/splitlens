@@ -1742,3 +1742,158 @@ function initialsFor(name: string): string {
   if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
   return (parts[0]![0]! + parts[1]![0]!).toUpperCase();
 }
+
+// ============================================================================
+// Client-side filtering — bulk loaders
+//
+// Apple-instant filter clicks on /review require the whole txn dataset to be
+// available in the browser. The server queries below pull EVERYTHING once,
+// then the client computes filters, buckets, and aggregates synchronously in
+// React's render pass. Each filter click becomes a pure useMemo recompute
+// instead of a network round-trip.
+// ============================================================================
+
+/** One row of the txn ledger, fattened with every column the client filter
+ *  + aggregation logic needs. Mirrors ReviewListRow but carries the few
+ *  extra fields that the filter predicates check (personId, accountId,
+ *  shareCount, recurrence, counterpartyKind). */
+export interface ClientReviewRow {
+  id: number;
+  accountId: number;
+  txnDate: string; // YYYY-MM-DD
+  txnTime: string | null; // HH:MM
+  /** Positive amount; direction tells you the sign. */
+  amount: number;
+  direction: "debit" | "credit";
+  counterparty: string | null;
+  counterpartyKind: string | null;
+  personId: string | null;
+  narration: string | null;
+  category: string | null;
+  shareCount: number;
+  reviewed: boolean;
+  recurrence: string | null;
+  sourceCount: number;
+  hasReceipt: boolean;
+}
+
+/** Per-counterparty context that doesn't depend on the active filter —
+ *  lifetime counts and the trailing-12-months sparkline. Cached on the
+ *  client because computing these requires scanning the whole ledger. */
+export interface ClientMerchantContext {
+  counterparty: string;
+  lifetimeCount: number;
+  /** 12 monthly counts, oldest → newest, ending in the current month. */
+  sparkline: number[];
+}
+
+/**
+ * Load every txn in the ledger as plain client-shaped rows. No filter, no
+ * limit. The client uses this to drive instant filter/bucket recomputes;
+ * the server still owns the per-row detail fetch (getTransactionForReview).
+ *
+ * Payload size: ~150 bytes/row × N rows. At 10k rows we're at ~1.5MB raw,
+ * ~350KB gzipped — fine for local-first.
+ */
+export async function getAllClientReviewRows(): Promise<ClientReviewRow[]> {
+  const rows = db().all<{
+    id: number;
+    account_id: number;
+    txn_date: string;
+    txn_time: string | null;
+    withdrawal: number | null;
+    deposit: number | null;
+    counterparty: string | null;
+    counterparty_kind: string | null;
+    person_id: string | null;
+    narration: string | null;
+    category: string | null;
+    share_count: number;
+    reviewed: number;
+    recurrence: string | null;
+    source_count: number;
+    has_receipt: number;
+  }>(sql`
+    SELECT t.id, t.account_id, t.txn_date, t.txn_time, t.withdrawal, t.deposit,
+           t.counterparty, t.counterparty_kind, t.person_id, t.narration,
+           t.category, t.share_count, t.reviewed, t.recurrence,
+           (SELECT count(DISTINCT source_type) FROM transaction_sources
+              WHERE transaction_id = t.id) AS source_count,
+           EXISTS (
+             SELECT 1 FROM transaction_sources s
+             WHERE s.transaction_id = t.id
+               AND s.source_type IN ('zepto_invoice', 'swiggy_email', 'zomato_email',
+                                     'zepto_ocr', 'blinkit_ocr', 'instamart_ocr')
+           ) AS has_receipt
+    FROM transactions t
+    ORDER BY t.txn_date DESC, COALESCE(t.txn_time, '00:00') DESC, t.id DESC
+  `);
+  return rows.map((r) => ({
+    id: r.id,
+    accountId: r.account_id,
+    txnDate: r.txn_date,
+    txnTime: r.txn_time,
+    amount: r.withdrawal ?? r.deposit ?? 0,
+    direction: r.withdrawal ? "debit" : "credit",
+    counterparty: r.counterparty,
+    counterpartyKind: r.counterparty_kind,
+    personId: r.person_id,
+    narration: r.narration,
+    category: r.category,
+    shareCount: r.share_count,
+    reviewed: !!r.reviewed,
+    recurrence: r.recurrence,
+    sourceCount: Number(r.source_count),
+    hasReceipt: !!r.has_receipt,
+  }));
+}
+
+/**
+ * Lifetime + 12-month sparkline per counterparty. Filter-independent, so
+ * we load it once at page boot. The client zips this with the active
+ * filter's per-merchant slice to produce the rich by-merchant rows.
+ */
+export async function getAllMerchantContexts(): Promise<ClientMerchantContext[]> {
+  // 12 axis months ending in the current month.
+  const now = new Date();
+  const axis: string[] = [];
+  for (let i = 11; i >= 0; i--) {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+    axis.push(
+      `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`,
+    );
+  }
+  const oldestYm = axis[0];
+
+  const lifetime = db().all<{ counterparty: string; n: number }>(sql`
+    SELECT counterparty, count(*) AS n
+    FROM transactions
+    WHERE counterparty IS NOT NULL AND counterparty != ''
+    GROUP BY counterparty
+  `);
+
+  const monthly = db().all<{
+    counterparty: string;
+    ym: string;
+    n: number;
+  }>(sql`
+    SELECT counterparty, substr(txn_date, 1, 7) AS ym, count(*) AS n
+    FROM transactions
+    WHERE counterparty IS NOT NULL AND counterparty != ''
+      AND txn_date >= ${oldestYm + "-01"}
+    GROUP BY counterparty, substr(txn_date, 1, 7)
+  `);
+
+  const sparkByMerchant = new Map<string, number[]>();
+  for (const r of monthly) {
+    const arr = sparkByMerchant.get(r.counterparty) ?? new Array(12).fill(0);
+    const idx = axis.indexOf(r.ym);
+    if (idx >= 0) arr[idx] = Number(r.n);
+    sparkByMerchant.set(r.counterparty, arr);
+  }
+  return lifetime.map((r) => ({
+    counterparty: r.counterparty,
+    lifetimeCount: Number(r.n),
+    sparkline: sparkByMerchant.get(r.counterparty) ?? new Array(12).fill(0),
+  }));
+}
