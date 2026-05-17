@@ -47,7 +47,7 @@ export function TopCounterparties({ rows }: { rows: TopCounterparty[] }) {
             <Link
               key={r.counterparty}
               href={href}
-              className="flex flex-col"
+              className="flex flex-col top-counterparty-row"
               aria-label={`Open ${r.counterparty} detail`}
               style={{
                 padding: "10px 8px",
@@ -61,13 +61,6 @@ export function TopCounterparties({ rows }: { rows: TopCounterparty[] }) {
                 textDecoration: "none",
                 color: "inherit",
                 transition: "background 0.12s ease",
-              }}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLElement).style.background =
-                  "var(--surface-2)";
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLElement).style.background = "";
               }}
             >
               <div className="flex items-baseline justify-between gap-3">

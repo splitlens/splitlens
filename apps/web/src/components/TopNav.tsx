@@ -33,10 +33,12 @@ const PALETTES: { id: PaletteId; label: string; swatch: string }[] = [
 ];
 
 /** Routes that own their own page chrome and should suppress the global
- *  TopNav. The merchant surface is dark/calm by design and ships its own
- *  breadcrumb — stacking the TopNav above it breaks the visual register.
- *  Matches both `/merchants` (index) and `/merchants/...` (detail). */
-const SUPPRESS_NAV_EXACT = new Set(["/merchants"]);
+ *  TopNav. The merchant-detail surface is dark/calm by design and ships
+ *  its own breadcrumb — stacking the TopNav above it breaks the visual
+ *  register. The bare `/merchants` index page was retired in favor of
+ *  the By-merchant view inside /review, so only the `/merchants/...`
+ *  detail prefix is left here. */
+const SUPPRESS_NAV_EXACT = new Set<string>();
 const SUPPRESS_NAV_PREFIXES = ["/merchants/"];
 
 export function TopNav() {

@@ -18,10 +18,12 @@
  *   ?sort, ?tod, ?share, ?rec
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import type {
   CustomCategoryRow,
+  MerchantAggregate,
   ReviewListFilter,
   ReviewListResult,
   ReviewListRow,
@@ -57,6 +59,9 @@ export interface ReviewLayoutProps {
   activeId: number | null;
   activeDetail: ReviewTransactionDetail | null;
   customCategories: CustomCategoryRow[];
+  /** Per-merchant rich aggregates for the by-merchant view (sparkline,
+   *  lifetime count, etc.). One row per merchant in the active filter. */
+  merchantAggregates: MerchantAggregate[];
 }
 
 const LIST_GROUP_MODE_KEY = "splitlens.review.listGroupMode";
@@ -66,7 +71,17 @@ export function ReviewLayout(props: ReviewLayoutProps) {
   const params = useSearchParams();
   const [pending, startTransition] = useTransition();
 
-  const { list, meta, people, buckets, filter, activeId, activeDetail, customCategories } = props;
+  const {
+    list,
+    meta,
+    people,
+    buckets,
+    filter,
+    activeId,
+    activeDetail,
+    customCategories,
+    merchantAggregates,
+  } = props;
 
   // Register custom categories with the global lookup so chips/dots resolve.
   const customDefs = useMemo(
@@ -376,6 +391,7 @@ export function ReviewLayout(props: ReviewLayoutProps) {
             selected={selected}
             q={filter.q ?? ""}
             groupMode={listGroupMode}
+            merchantAggregates={merchantAggregates}
             onSelectId={goToId}
             onSelectMerchant={openMerchantInModal}
             onToggleSelected={toggleSelected}
@@ -1122,6 +1138,7 @@ function TxnDayList({
   selected,
   q,
   groupMode,
+  merchantAggregates,
   onSelectId,
   onSelectMerchant,
   onToggleSelected,
@@ -1132,6 +1149,7 @@ function TxnDayList({
   selected: Set<number>;
   q: string;
   groupMode: ListGroupMode;
+  merchantAggregates: MerchantAggregate[];
   onSelectId: (id: number) => void;
   /** Click on a merchant leaderboard row — opens the per-merchant detail
    *  modal. `focusTxnId` is one of the merchant's txns (we use the first
@@ -1147,6 +1165,24 @@ function TxnDayList({
     () => (groupMode === "merchant" ? groupByMerchant(rows) : []),
     [rows, groupMode],
   );
+  // Map merchant name → rich aggregate so each group can attach the
+  // sparkline, lifetime count, raw narration, etc. without a re-query.
+  const aggByMerchant = useMemo(() => {
+    const m = new Map<string, MerchantAggregate>();
+    for (const a of merchantAggregates) m.set(a.counterparty, a);
+    return m;
+  }, [merchantAggregates]);
+  // Inline-expand state for the by-merchant view — keyed by merchant name
+  // so a render with the same key keeps the same open state.
+  const [openMerchants, setOpenMerchants] = useState<Set<string>>(new Set());
+  const toggleMerchant = useCallback((key: string) => {
+    setOpenMerchants((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
 
   if (rows.length === 0) {
     return (
@@ -1201,13 +1237,22 @@ function TxnDayList({
             // gives MerchantDetailView a sensible txn to focus on initially.
             const focusTxnId = g.rows[0]?.id;
             if (focusTxnId == null) return null;
+            const agg = aggByMerchant.get(g.merchant);
+            const open = openMerchants.has(g.merchant);
             return (
-              <MerchantLeaderRow
+              <RichMerchantRow
                 key={g.merchant}
                 merchant={g.merchant}
-                count={g.rows.length}
-                debitTotal={g.debitTotal}
-                onOpen={() => onSelectMerchant(g.merchant, focusTxnId)}
+                group={g}
+                agg={agg ?? null}
+                open={open}
+                activeId={activeId}
+                selected={selected}
+                q={q}
+                onToggleOpen={() => toggleMerchant(g.merchant)}
+                onOpenDetail={() => onSelectMerchant(g.merchant, focusTxnId)}
+                onSelectId={onSelectId}
+                onToggleSelected={onToggleSelected}
               />
             );
           })}
@@ -1278,6 +1323,224 @@ function MerchantLeaderRow({
         <Ico name="chevron-right" size={13} />
       </div>
     </button>
+  );
+}
+
+/**
+ * The design-handoff merchant row for the by-merchant view.
+ *
+ * 7-column grid, mirroring the hi-fi design at
+ *   splitlens/project/hifi-review-list-v2.jsx:
+ *
+ *   chev (28) · avatar (36) · name+raw (1fr) · category (110)
+ *                                             · sparkline (100)
+ *                                             · last+range (110)
+ *                                             · total+avg (112, right)
+ *
+ * Click anywhere on the row toggles inline expand. The expanded state
+ * renders the merchant's in-filter txns underneath, plus an AI nudge
+ * banner with an "Open merchant" link that navigates to
+ *   /merchants/<personId or counterparty>
+ * — the dedicated dark-themed detail page.
+ */
+function RichMerchantRow({
+  merchant,
+  group,
+  agg,
+  open,
+  activeId,
+  selected,
+  q,
+  onToggleOpen,
+  onOpenDetail,
+  onSelectId,
+  onToggleSelected,
+}: {
+  merchant: string;
+  group: MerchantGroup;
+  /** Backend aggregate. May be null for the "—" / unknown row, which has
+   *  no real counterparty and so doesn't get sparkline / lifetime data. */
+  agg: MerchantAggregate | null;
+  open: boolean;
+  activeId: number | null;
+  selected: Set<number>;
+  q: string;
+  onToggleOpen: () => void;
+  /** Opens the in-review MerchantDetailView modal (alt path). */
+  onOpenDetail: () => void;
+  onSelectId: (id: number) => void;
+  onToggleSelected: (id: number) => void;
+}) {
+  const isUnknown = merchant === UNKNOWN_MERCHANT_KEY || agg == null;
+  const initials = agg?.initials ?? "·";
+  const kind = agg?.kind ?? "business";
+  const avi =
+    kind === "person"
+      ? {
+          background: "rgba(209, 134, 114, 0.16)",
+          color: "#d18672",
+          borderRadius: 999,
+          border: "1px solid rgba(209, 134, 114, 0.3)",
+        }
+      : {
+          background: "rgba(173, 154, 216, 0.16)",
+          color: "#ad9ad8",
+          borderRadius: 8,
+        };
+
+  const lastLabel = agg?.lastSeenInFilter
+    ? fmtRowDate(agg.lastSeenInFilter)
+    : "—";
+  const rangeLabel = agg
+    ? `${agg.countInFilter} in scope · ${agg.lifetimeCount} lifetime`
+    : `${group.rows.length} in scope`;
+  const total = group.debitTotal;
+  const avg =
+    group.rows.length > 0 && total > 0
+      ? Math.round(total / group.rows.length)
+      : 0;
+
+  const detailHref = agg
+    ? `/merchants/${encodeURIComponent(agg.slug)}`
+    : null;
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={onToggleOpen}
+        className={`mrow${open ? " open" : ""}`}
+        aria-expanded={open}
+      >
+        <span className="mrow-chev" aria-hidden>
+          <Ico name={open ? "chevron-down" : "chevron-right"} size={13} />
+        </span>
+        <span className="mrow-avi" style={avi}>
+          {initials}
+        </span>
+        <span className="mrow-name">
+          <span className="mrow-name-line">
+            <span className="mrow-name-text" title={merchant}>
+              {merchant}
+            </span>
+            {agg?.recurring && (
+              <span className="mrow-chip">
+                <Ico name="repeat" size={11} /> recurring
+              </span>
+            )}
+            {!isUnknown && agg?.category == null && (
+              <span className="mrow-chip mrow-chip-warn">
+                needs category
+              </span>
+            )}
+          </span>
+          {agg?.rawNarrationSample && (
+            <span
+              className="mrow-raw"
+              title={agg.rawNarrationSample}
+            >
+              {agg.rawNarrationSample}
+            </span>
+          )}
+        </span>
+        <span className="mrow-cat" title={agg?.category ?? "Uncategorized"}>
+          {agg?.category ?? (
+            <span style={{ color: "var(--warn)" }}>Uncategorized</span>
+          )}
+        </span>
+        <span className="mrow-spark" aria-hidden>
+          <Sparkline values={agg?.sparkline ?? []} hi={agg?.sparkHighlights ?? []} />
+        </span>
+        <span className="mrow-range">
+          <span className="mrow-range-last">{lastLabel}</span>
+          <span className="mrow-range-freq">{rangeLabel}</span>
+        </span>
+        <span className="mrow-tot">
+          <span className="mrow-tot-amt">
+            {total > 0 ? `−${fmtInr(total)}` : "—"}
+          </span>
+          <span className="mrow-tot-avg">
+            {group.rows.length > 1 && avg > 0
+              ? `avg −${fmtInr(avg)}`
+              : `${group.rows.length} txn${group.rows.length === 1 ? "" : "s"}`}
+          </span>
+        </span>
+      </button>
+
+      {open && (
+        <div className="mrow-expand">
+          {/* AI nudge — pure stats today; tag-suggestion is a future feature.
+              We surface what we know (txn count, average, lifetime) so the
+              expanded state has context beyond just the txn list. */}
+          {agg && (
+            <div className="mrow-nudge">
+              <Ico name="sparkles" size={13} className="accent" />
+              <span>
+                {agg.kind === "person"
+                  ? `${agg.lifetimeCount} prior transfer${agg.lifetimeCount === 1 ? "" : "s"} with ${merchant}`
+                  : `${agg.lifetimeCount} lifetime txn${agg.lifetimeCount === 1 ? "" : "s"} at ${merchant}`}
+                {group.rows.length > 1 && avg > 0 && (
+                  <>
+                    {" · "}avg <b style={{ fontWeight: 500 }}>−{fmtInr(avg)}</b>
+                  </>
+                )}
+              </span>
+              <span style={{ flex: 1 }} />
+              {detailHref && (
+                <Link href={detailHref} className="btn btn-sm primary">
+                  Open merchant <span className="kbd kbd-on-accent">⏎</span>
+                </Link>
+              )}
+              <button
+                type="button"
+                className="btn btn-sm ghost"
+                onClick={onOpenDetail}
+              >
+                Quick look
+              </button>
+            </div>
+          )}
+
+          {/* Child txns — each clickable, opens the InboxModal for that row. */}
+          <div className="mrow-children">
+            {group.rows.map((r) => (
+              <TxnRow
+                key={r.id}
+                row={r}
+                active={r.id === activeId}
+                selected={selected.has(r.id)}
+                q={q}
+                showDate
+                onOpen={() => onSelectId(r.id)}
+                onToggleSelect={() => onToggleSelected(r.id)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 12-cell bar sparkline for the merchant row. Values are counts; bars
+ * scale to the local max so the visualization is comparable within the
+ * row, not against the whole list. Highlighted indices render in accent.
+ */
+function Sparkline({ values, hi }: { values: number[]; hi: number[] }) {
+  const slots = values.length > 0 ? values : new Array(12).fill(0);
+  const max = Math.max(1, ...slots);
+  const hiSet = new Set(hi);
+  return (
+    <span className="mrow-spark-bars">
+      {slots.map((v, i) => (
+        <i
+          key={i}
+          className={hiSet.has(i) ? "hi" : ""}
+          style={{ height: `${4 + (v / max) * 18}px` }}
+        />
+      ))}
+    </span>
   );
 }
 

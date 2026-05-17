@@ -23,6 +23,7 @@ import {
   getReviewFilterMeta,
   getTimeBuckets,
   listCustomCategories,
+  getMerchantListAggregates,
   type ReviewListFilter,
 } from "@/lib/review-repo";
 import { listKnownPeople } from "../friends/actions";
@@ -78,13 +79,18 @@ export default async function ReviewPage({ searchParams }: PageProps) {
       recParam === "one_time" || recParam === "recurring" ? recParam : null,
   };
 
-  const [list, meta, people, buckets, customCategories] = await Promise.all([
-    listTransactionsForReview(filter),
-    getReviewFilterMeta(),
-    listKnownPeople(),
-    getTimeBuckets(filter),
-    listCustomCategories(),
-  ]);
+  const [list, meta, people, buckets, customCategories, merchantAggregates] =
+    await Promise.all([
+      listTransactionsForReview(filter),
+      getReviewFilterMeta(),
+      listKnownPeople(),
+      getTimeBuckets(filter),
+      listCustomCategories(),
+      // Per-merchant aggregates feed the by-merchant view's rich rows
+      // (avatar, sparkline, raw narration line, last-seen, lifetime count).
+      // Same filter as the txn list so both views stay in sync.
+      getMerchantListAggregates(filter),
+    ]);
 
   // Pick the active row: explicit ?id wins; otherwise first unreviewed in the
   // filtered list; otherwise the first row (empty state handled in client).
@@ -106,6 +112,7 @@ export default async function ReviewPage({ searchParams }: PageProps) {
       activeId={activeId}
       activeDetail={detail}
       customCategories={customCategories}
+      merchantAggregates={merchantAggregates}
     />
   );
 }

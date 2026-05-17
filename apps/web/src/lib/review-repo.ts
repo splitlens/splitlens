@@ -1450,3 +1450,295 @@ export async function listCustomCategories(): Promise<CustomCategoryRow[]> {
     createdAt: r.created_at,
   }));
 }
+
+// ============================================================================
+// /review · By-merchant rich rows
+// ============================================================================
+
+/**
+ * One row in the by-merchant view. Carries everything the rich row needs —
+ * the in-filter aggregates that the row's columns display, plus lifetime
+ * context (sparkline + lifetime count) that lets the row tell a story
+ * beyond the active filter.
+ *
+ * The `slug` field is the canonical /merchants/[id] route segment, ready
+ * to drop into an href: person rows use `personId`, businesses use the
+ * counterparty string.
+ */
+export interface MerchantAggregate {
+  /** /merchants/[slug] target. */
+  slug: string;
+  /** Counterparty string from the transactions table. */
+  counterparty: string;
+  /** Type discriminator — drives avatar tone + click target. */
+  kind: "person" | "business";
+  /** Person id when kind === "person", else null. */
+  personId: string | null;
+  /** Display label (currently the counterparty as-is). */
+  displayName: string;
+  /** 1–2 char initials for the avatar tile. */
+  initials: string;
+  /** Most common category for this merchant inside the filter (mode). */
+  category: string | null;
+  /** True if any txn for this merchant carries a non-one_time recurrence. */
+  recurring: boolean;
+  /** A representative raw narration to show under the normalized name. */
+  rawNarrationSample: string | null;
+  /** Txns for this merchant inside the filter. */
+  countInFilter: number;
+  /** Withdrawal sum inside the filter. */
+  sumDebitInFilter: number;
+  /** Deposit sum inside the filter. */
+  sumCreditInFilter: number;
+  /** Most recent txn date inside the filter (YYYY-MM-DD). */
+  lastSeenInFilter: string;
+  /** Total lifetime txn count across all transactions. */
+  lifetimeCount: number;
+  /** 12 buckets of monthly counts, oldest → newest, for the trailing 12
+   *  months ending in the current month. Drives the row's sparkline. */
+  sparkline: number[];
+  /** Indices of bars that should render highlighted (> 1.5× the 12-mo
+   *  mean). Empty if no month stands out. */
+  sparkHighlights: number[];
+}
+
+/**
+ * Per-merchant aggregates for the by-merchant view of `/review`.
+ *
+ * Honors the same `ReviewListFilter` as `listTransactionsForReview` so the
+ * rows in the by-merchant view always agree with the rows in the by-date
+ * view. Sorted by combined absolute flow (debit + credit) descending —
+ * biggest-impact merchants first.
+ *
+ * Two SQL passes:
+ *   1. Group by counterparty + kind + person_id inside the filter, picking
+ *      up count/sum/last_seen plus a sample narration and category.
+ *   2. For every merchant we found, fetch lifetime count + monthly bucket
+ *      counts for the last 12 months in a single grouped query.
+ *
+ * Both passes scan the same table, so the cost is roughly two GROUP BYs
+ * over the txn ledger — fine for the local-first dataset size.
+ */
+export async function getMerchantListAggregates(
+  filter: ReviewListFilter = {},
+): Promise<MerchantAggregate[]> {
+  const where: ReturnType<typeof sql>[] = [
+    sql`t.counterparty IS NOT NULL AND t.counterparty != ''`,
+  ];
+  if (filter.from) where.push(sql`t.txn_date >= ${filter.from}`);
+  if (filter.to) where.push(sql`t.txn_date <= ${filter.to}`);
+  if (filter.category) where.push(sql`t.category = ${filter.category}`);
+  if (filter.unreviewedOnly) where.push(sql`t.reviewed = 0`);
+  if (filter.personId) where.push(sql`t.person_id = ${filter.personId}`);
+  if (filter.accountId != null) where.push(sql`t.account_id = ${filter.accountId}`);
+  if (filter.shareStatus === "personal") {
+    where.push(sql`(t.share_count IS NULL OR t.share_count = 1)`);
+  } else if (filter.shareStatus === "shared") {
+    where.push(sql`t.share_count > 1`);
+  }
+  if (filter.recurrenceClass === "one_time") {
+    where.push(sql`(t.recurrence IS NULL OR t.recurrence = 'one_time')`);
+  } else if (filter.recurrenceClass === "recurring") {
+    where.push(sql`t.recurrence IS NOT NULL AND t.recurrence != 'one_time'`);
+  }
+  if (filter.q && filter.q.trim()) {
+    const needle = `%${filter.q.trim().toLowerCase()}%`;
+    where.push(
+      sql`(LOWER(coalesce(t.counterparty,'')) LIKE ${needle} OR LOWER(coalesce(t.narration,'')) LIKE ${needle})`,
+    );
+  }
+  if (filter.timeOfDay === "morning") {
+    where.push(sql`t.txn_time IS NOT NULL AND t.txn_time >= '06:00' AND t.txn_time < '12:00'`);
+  } else if (filter.timeOfDay === "afternoon") {
+    where.push(sql`t.txn_time IS NOT NULL AND t.txn_time >= '12:00' AND t.txn_time < '17:00'`);
+  } else if (filter.timeOfDay === "evening") {
+    where.push(sql`t.txn_time IS NOT NULL AND t.txn_time >= '17:00' AND t.txn_time < '21:00'`);
+  } else if (filter.timeOfDay === "night") {
+    where.push(
+      sql`t.txn_time IS NOT NULL AND (t.txn_time >= '21:00' OR t.txn_time < '06:00')`,
+    );
+  }
+  const whereSql = sql`WHERE ${sql.join(where, sql` AND `)}`;
+
+  // Pass 1 — one row per merchant inside the filter.
+  // For category and raw narration we pick a single representative value
+  // per merchant. The "most-common category" is derived in JS from a
+  // separate small per-merchant×category query below — keeps the SQL
+  // portable across SQLite/PGlite (no window functions, no FILTER+
+  // ARGMAX). For the raw narration sample we settle for the most recent
+  // one, which matches what the design renders ("RAW NARRATION" line
+  // under the merchant name).
+  const inFilter = db().all<{
+    counterparty: string;
+    kind: string | null;
+    person_id: string | null;
+    n: number;
+    sum_debit: number;
+    sum_credit: number;
+    last_seen: string;
+    sample_narration: string | null;
+    any_recurring: number;
+  }>(sql`
+    SELECT
+      t.counterparty                           AS counterparty,
+      t.counterparty_kind                      AS kind,
+      t.person_id                              AS person_id,
+      count(*)                                 AS n,
+      COALESCE(SUM(t.withdrawal), 0)           AS sum_debit,
+      COALESCE(SUM(t.deposit), 0)              AS sum_credit,
+      MAX(t.txn_date)                          AS last_seen,
+      (SELECT t2.narration
+         FROM transactions t2
+         WHERE t2.counterparty = t.counterparty
+           AND t2.narration IS NOT NULL
+         ORDER BY t2.txn_date DESC, t2.id DESC
+         LIMIT 1)                              AS sample_narration,
+      MAX(CASE WHEN t.recurrence IS NOT NULL AND t.recurrence != 'one_time'
+               THEN 1 ELSE 0 END)              AS any_recurring
+    FROM transactions t
+    ${whereSql}
+    GROUP BY t.counterparty, t.counterparty_kind, t.person_id
+  `);
+
+  if (inFilter.length === 0) return [];
+
+  const names = inFilter.map((r) => r.counterparty);
+
+  // Pass 2a — most common category per merchant. Counts per (merchant,
+  // category) inside the filter; JS picks the top per merchant.
+  const catRows = db().all<{
+    counterparty: string;
+    category: string | null;
+    n: number;
+  }>(sql`
+    SELECT t.counterparty AS counterparty,
+           t.category     AS category,
+           count(*)       AS n
+    FROM transactions t
+    ${whereSql}
+      AND t.counterparty IN (${sql.join(
+        names.map((n) => sql`${n}`),
+        sql`, `,
+      )})
+    GROUP BY t.counterparty, t.category
+  `);
+  const topCategory = new Map<string, string | null>();
+  {
+    // For each merchant, keep the category with the highest count. Skip
+    // null categories unless they're literally all we have.
+    const bestNonNull = new Map<string, { cat: string; n: number }>();
+    const bestAny = new Map<string, { cat: string | null; n: number }>();
+    for (const r of catRows) {
+      const prevAny = bestAny.get(r.counterparty);
+      if (!prevAny || r.n > prevAny.n) {
+        bestAny.set(r.counterparty, { cat: r.category, n: r.n });
+      }
+      if (r.category != null) {
+        const prevNN = bestNonNull.get(r.counterparty);
+        if (!prevNN || r.n > prevNN.n) {
+          bestNonNull.set(r.counterparty, { cat: r.category, n: r.n });
+        }
+      }
+    }
+    for (const m of names) {
+      const nn = bestNonNull.get(m);
+      const any = bestAny.get(m);
+      topCategory.set(m, nn?.cat ?? any?.cat ?? null);
+    }
+  }
+
+  // Pass 2b — lifetime count and 12-month sparkline buckets. Single query
+  // grouped by (counterparty, year-month); JS bins into 12 trailing
+  // months ending in the current month.
+  const now = new Date();
+  const axis: string[] = [];
+  for (let i = 11; i >= 0; i--) {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+    axis.push(
+      `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`,
+    );
+  }
+  const oldestYm = axis[0];
+  const monthlyRows = db().all<{
+    counterparty: string;
+    ym: string;
+    n: number;
+  }>(sql`
+    SELECT t.counterparty            AS counterparty,
+           substr(t.txn_date, 1, 7)  AS ym,
+           count(*)                  AS n
+    FROM transactions t
+    WHERE t.counterparty IN (${sql.join(
+      names.map((n) => sql`${n}`),
+      sql`, `,
+    )})
+      AND t.txn_date >= ${oldestYm + "-01"}
+    GROUP BY t.counterparty, substr(t.txn_date, 1, 7)
+  `);
+  const lifetimeRows = db().all<{ counterparty: string; n: number }>(sql`
+    SELECT t.counterparty AS counterparty, count(*) AS n
+    FROM transactions t
+    WHERE t.counterparty IN (${sql.join(
+      names.map((n) => sql`${n}`),
+      sql`, `,
+    )})
+    GROUP BY t.counterparty
+  `);
+  const lifetimeByMerchant = new Map<string, number>();
+  for (const r of lifetimeRows) {
+    lifetimeByMerchant.set(r.counterparty, Number(r.n));
+  }
+  const sparkByMerchant = new Map<string, number[]>();
+  for (const r of monthlyRows) {
+    const arr = sparkByMerchant.get(r.counterparty) ?? new Array(12).fill(0);
+    const idx = axis.indexOf(r.ym);
+    if (idx >= 0) arr[idx] = Number(r.n);
+    sparkByMerchant.set(r.counterparty, arr);
+  }
+
+  // Assemble + sort.
+  const out: MerchantAggregate[] = inFilter.map((r) => {
+    const kind: MerchantAggregate["kind"] =
+      r.kind === "person" || r.person_id ? "person" : "business";
+    const slug =
+      kind === "person" && r.person_id ? r.person_id : r.counterparty;
+    const spark = sparkByMerchant.get(r.counterparty) ?? new Array(12).fill(0);
+    const mean = spark.reduce((s, n) => s + n, 0) / 12;
+    const hot = mean > 0 ? spark.map((n, i) => (n > mean * 1.5 ? i : -1)).filter((i) => i >= 0) : [];
+    return {
+      slug,
+      counterparty: r.counterparty,
+      kind,
+      personId: kind === "person" ? r.person_id : null,
+      displayName: r.counterparty,
+      initials: initialsFor(r.counterparty),
+      category: topCategory.get(r.counterparty) ?? null,
+      recurring: Number(r.any_recurring) > 0,
+      rawNarrationSample: r.sample_narration,
+      countInFilter: Number(r.n),
+      sumDebitInFilter: Number(r.sum_debit),
+      sumCreditInFilter: Number(r.sum_credit),
+      lastSeenInFilter: r.last_seen,
+      lifetimeCount: lifetimeByMerchant.get(r.counterparty) ?? Number(r.n),
+      sparkline: spark,
+      sparkHighlights: hot,
+    };
+  });
+
+  // Sort by absolute flow desc — biggest impact first.
+  out.sort(
+    (a, b) =>
+      b.sumDebitInFilter +
+      b.sumCreditInFilter -
+      (a.sumDebitInFilter + a.sumCreditInFilter),
+  );
+  return out;
+}
+
+/** 1–2 char avatar text. Persons use first letters of words; businesses use the leading char. */
+function initialsFor(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "·";
+  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
+  return (parts[0]![0]! + parts[1]![0]!).toUpperCase();
+}
