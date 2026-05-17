@@ -8,6 +8,7 @@
  *   - settlement  Per-person settlement math
  *   - people      Person registry + UPI matching
  *   - merchants   Merchant cadence + history + product hints (SmartSuggest)
+ *   - location    Google Timeline matcher + online-merchant predicate
  *
  * Pure functions only. No DOM, no Node-specific imports, no I/O.
  * Bring your own PDF text extractor (PDF.js for browser, pdf-parse for Node).
