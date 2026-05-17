@@ -61,6 +61,11 @@ type NavEntry = { name: string; firstIndex: number; count: number };
  *  toggles (multi-select). */
 type PickerDim = "category" | "merchant" | "friend";
 
+/** Splitwise-style split methods. Tracked separately from the
+ *  underlying sharedWith/shareCount fields so the UI can offer rich
+ *  modes without immediately requiring a DB schema migration. */
+type SplitMethod = "equal" | "exact" | "percent" | "shares";
+
 export function SplitTxnModal({
   row,
   people,
@@ -145,12 +150,51 @@ export function SplitTxnModal({
   const [otherCount, setOtherCount] = useState(0);
   const [applyRule, setApplyRule] = useState(true);
 
-  // Detail-pane state. Default closed — the modal stays narrow and
-  // focused on the split decision. Click on the txn header card
-  // (counterparty + amount block) toggles open; we lazy-fetch the
-  // full ReviewTransactionDetail then. Cached per-row so re-opening
-  // is instant.
-  const [detailOpen, setDetailOpen] = useState(false);
+  // Right-pane state. One slide-out slot, two possible contents:
+  //   "detail" — read-only transaction detail (raw narration, source,
+  //              recall context). Triggered by clicking the txn
+  //              header card or pressing Space.
+  //   "split"  — Splitwise-style advanced split configurator (mode
+  //              tabs, per-friend amounts, paid-by, live total).
+  //              Triggered by clicking the X-way badge or pressing
+  //              backslash.
+  //   null     — closed; modal stays narrow at 640px max-width.
+  // Both panes share the same animation, slot, and max-width
+  // expansion so toggling between them feels like swapping content
+  // inside one drawer, not opening a second drawer.
+  const [rightPane, setRightPane] = useState<"detail" | "split" | null>(null);
+  const rightPaneOpen = rightPane !== null;
+
+  // Splitwise-style advanced split state, surfaced inside SplitPane.
+  // For Phase 1, only `equal` persists end-to-end via the existing
+  // sharedWith + shareCount columns. The other three modes are wired
+  // into the UI (live total/remaining, per-friend inputs) but show a
+  // "Preview — saves as equal for now" notice on save; full
+  // persistence requires a `split_details` JSON column on
+  // transactions and is a separate PR.
+  const [splitMethod, setSplitMethod] = useState<SplitMethod>("equal");
+  // Per-participant override map. Keys are participant display names
+  // ("you" for the user, the friend's displayName for friends). Values
+  // are interpreted per-method:
+  //   exact   — rupees
+  //   percent — 0-100 (must sum to 100)
+  //   shares  — non-negative integers
+  // For "equal", entries are ignored (each participant gets
+  // total/ways automatically).
+  const [splitEntries, setSplitEntries] = useState<Map<string, number>>(
+    () => new Map(),
+  );
+  // Payer. null = you paid (default — most common case). Setting a
+  // friend here means that friend fronted the bill; the balance
+  // direction flips for that participant in the Friends ledger.
+  // Saved as part of the split_details payload in Phase 2.
+  const [paidBy, setPaidBy] = useState<string | null>(null);
+  // Reset split state when the row changes — entries are row-scoped.
+  useEffect(() => {
+    setSplitMethod("equal");
+    setSplitEntries(new Map());
+    setPaidBy(null);
+  }, [row.id]);
   // Picker popover state. `activePicker` discriminates between the
   // category strip's picker and the merchant strip's picker; only
   // one can be open at a time so the user is never juggling two
@@ -239,7 +283,7 @@ export function SplitTxnModal({
     // parallel — both are cheap indexed reads and they're independent.
     setDetail(null);
     setRecall(null);
-    if (!detailOpen) return;
+    if (rightPane !== "detail") return;
     let cancelled = false;
     setDetailLoading(true);
     Promise.all([
@@ -254,7 +298,7 @@ export function SplitTxnModal({
     return () => {
       cancelled = true;
     };
-  }, [row.id, row.counterparty, row.amount, detailOpen]);
+  }, [row.id, row.counterparty, row.amount, rightPane]);
 
   // Category-change detection. The queue is sorted by category so
   // arrow-keying walks through same-category rows. When the category
@@ -541,7 +585,13 @@ export function SplitTxnModal({
         // preventDefault stops Space from activating a focused
         // button (e.g. "Just me") AND stops the page from scrolling.
         e.preventDefault();
-        setDetailOpen((v) => !v);
+        setRightPane((cur) => (cur === "detail" ? null : "detail"));
+      } else if (e.key === "\\") {
+        // Backslash toggles the split-config pane. Chose `\` because
+        // it's unused elsewhere and sits within easy reach of the
+        // home row for keyboard users.
+        e.preventDefault();
+        setRightPane((cur) => (cur === "split" ? null : "split"));
       } else if (e.key === "[") {
         e.preventDefault();
         onPrevCategory();
@@ -659,7 +709,7 @@ export function SplitTxnModal({
             // 420 houses the detail pane drawer. Timing matches the
             // inner aside's width animation (320ms easeOutExpo) so
             // the shell and the drawer expand in lockstep.
-            maxWidth: detailOpen ? 1060 : 640,
+            maxWidth: rightPaneOpen ? 1060 : 640,
             maxHeight: "90vh",
             overflow: "hidden",
             display: "flex",
@@ -782,7 +832,7 @@ export function SplitTxnModal({
           >
             <div
               style={{
-                flex: detailOpen ? "0 0 640px" : "1 1 auto",
+                flex: rightPaneOpen ? "0 0 640px" : "1 1 auto",
                 overflowY: "auto",
                 padding: "18px 22px",
                 display: "flex",
@@ -794,10 +844,12 @@ export function SplitTxnModal({
             {/* Counterparty + amount — clickable to toggle the detail pane */}
             <button
               type="button"
-              onClick={() => setDetailOpen((v) => !v)}
-              aria-expanded={detailOpen}
+              onClick={() =>
+                setRightPane((cur) => (cur === "detail" ? null : "detail"))
+              }
+              aria-expanded={rightPane === "detail"}
               title={
-                detailOpen
+                rightPane === "detail"
                   ? "Close transaction detail"
                   : "Click for raw bank narration, account, source info"
               }
@@ -829,7 +881,7 @@ export function SplitTxnModal({
                   {row.counterparty}
                 </h2>
                 <Ico
-                  name={detailOpen ? "chevron-right" : "more"}
+                  name={rightPane === "detail" ? "chevron-right" : "more"}
                   size={14}
                   className="muted-2"
                 />
@@ -902,9 +954,42 @@ export function SplitTxnModal({
               <div className="flex items-baseline justify-between" style={{ marginBottom: 8 }}>
                 <span className="eyebrow">Whose expense</span>
                 {split && (
-                  <span className="tag mono">
+                  // Clickable badge → opens the SplitPane for
+                  // advanced configuration (exact / percent / shares,
+                  // paid-by selector, live total). Looks like the
+                  // original tag but with a chevron and hover affordance
+                  // so it's clearly an entry point, not a static label.
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setRightPane((cur) =>
+                        cur === "split" ? null : "split",
+                      )
+                    }
+                    aria-expanded={rightPane === "split"}
+                    title="Customize split (\\)"
+                    className="tag mono"
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      cursor: "pointer",
+                      border:
+                        rightPane === "split"
+                          ? "1px solid var(--accent-line)"
+                          : undefined,
+                      background:
+                        rightPane === "split" ? "var(--accent-soft)" : undefined,
+                      color:
+                        rightPane === "split" ? "var(--accent)" : undefined,
+                      fontFamily: "inherit",
+                      transition:
+                        "background 140ms var(--ease-out), border-color 140ms var(--ease-out), color 140ms var(--ease-out)",
+                    }}
+                  >
                     {ways}-way · {fmtInr(perPerson)} each
-                  </span>
+                    <Ico name="chevron-right" size={11} />
+                  </button>
                 )}
               </div>
               <div
@@ -1145,15 +1230,19 @@ export function SplitTxnModal({
             )}
             </div>
 
-            {/* Right pane — detail. Animates its own width on
+            {/* Right pane — slot. Animates its own width on
                 enter/exit so the reveal feels like a drawer sliding
-                out from the modal's right edge, not a fade.
-                AnimatePresence is what allows the exit animation to
-                fire when detailOpen flips back to false. */}
+                out from the modal's right edge, not a fade. The slot
+                hosts either the read-only DetailPane or the
+                interactive SplitPane based on `rightPane`. Inner
+                content swap uses a nested AnimatePresence keyed on
+                `rightPane` so changing between detail ↔ split fades
+                content without re-mounting the aside (which would
+                cause the drawer to close + reopen). */}
             <AnimatePresence initial={false}>
-              {detailOpen && (
+              {rightPaneOpen && (
                 <motion.aside
-                  key="detail-pane"
+                  key="right-pane"
                   initial={{ width: 0, opacity: 0 }}
                   animate={{ width: 420, opacity: 1 }}
                   exit={{ width: 0, opacity: 0 }}
@@ -1172,30 +1261,66 @@ export function SplitTxnModal({
                     background: "var(--surface-2)",
                   }}
                 >
-                  <motion.div
-                    initial={{ x: 24, opacity: 0 }}
-                    animate={{ x: 0, opacity: 1 }}
-                    exit={{ x: 24, opacity: 0 }}
-                    transition={{
-                      duration: 0.26,
-                      ease: [0.16, 1, 0.3, 1],
-                      delay: 0.06,
-                    }}
+                  <div
                     style={{
                       width: 420,
                       height: "100%",
                       overflowY: "auto",
                       padding: "18px 22px",
+                      position: "relative",
                     }}
                   >
-                    <DetailPane
-                      row={row}
-                      detail={detail}
-                      recall={recall}
-                      loading={detailLoading}
-                      onClose={() => setDetailOpen(false)}
-                    />
-                  </motion.div>
+                    <AnimatePresence mode="wait" initial={false}>
+                      {rightPane === "detail" && (
+                        <motion.div
+                          key="detail-content"
+                          initial={{ x: 16, opacity: 0 }}
+                          animate={{ x: 0, opacity: 1 }}
+                          exit={{ x: -16, opacity: 0 }}
+                          transition={{
+                            duration: 0.22,
+                            ease: [0.16, 1, 0.3, 1],
+                          }}
+                        >
+                          <DetailPane
+                            row={row}
+                            detail={detail}
+                            recall={recall}
+                            loading={detailLoading}
+                            onClose={() => setRightPane(null)}
+                          />
+                        </motion.div>
+                      )}
+                      {rightPane === "split" && (
+                        <motion.div
+                          key="split-content"
+                          initial={{ x: 16, opacity: 0 }}
+                          animate={{ x: 0, opacity: 1 }}
+                          exit={{ x: -16, opacity: 0 }}
+                          transition={{
+                            duration: 0.22,
+                            ease: [0.16, 1, 0.3, 1],
+                          }}
+                        >
+                          <SplitPane
+                            totalAmount={row.amount}
+                            sharedWith={sharedWith}
+                            shareCount={shareCount}
+                            splitMethod={splitMethod}
+                            setSplitMethod={setSplitMethod}
+                            splitEntries={splitEntries}
+                            setSplitEntries={setSplitEntries}
+                            paidBy={paidBy}
+                            setPaidBy={setPaidBy}
+                            onOpenFriendPicker={() =>
+                              setActivePicker("friend")
+                            }
+                            onClose={() => setRightPane(null)}
+                          />
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
                 </motion.aside>
               )}
             </AnimatePresence>
@@ -1237,6 +1362,7 @@ export function SplitTxnModal({
                   <span className="kbd">F</span> friends ·{" "}
                   <span className="kbd">2</span>–<span className="kbd">9</span> way ·{" "}
                   <span className="kbd">Space</span> detail ·{" "}
+                  <span className="kbd">\</span> split ·{" "}
                   <span className="kbd">[</span>/<span className="kbd">]</span> cat ·{" "}
                   <span className="kbd">&#123;</span>/<span className="kbd">&#125;</span> merch ·{" "}
                   <span className="kbd">Esc</span> close
@@ -2043,6 +2169,504 @@ function Field({
         {label}
       </span>
       <div>{children}</div>
+    </div>
+  );
+}
+
+/**
+ * SplitPane — Splitwise-style split configurator. Slides out into
+ * the same right-side slot as DetailPane.
+ *
+ * Four split methods, each renders per-participant rows differently:
+ *
+ *   equal   — read-only. Each participant gets total / ways.
+ *   exact   — editable rupee amounts. Sum must equal total.
+ *   percent — editable 0-100 percentages. Sum must equal 100.
+ *   shares  — editable share counts (1, 2, 3...). Each participant's
+ *             rupee share = total × (their shares / total shares).
+ *
+ * The "You" participant always sits at the top of the list — the
+ * user is the implicit anchor of the split. Friends below come from
+ * `sharedWith` in selection order. "+ Add friend" opens the existing
+ * friend picker (so the user doesn't have to context-switch back to
+ * the form to add more participants).
+ *
+ * **Persistence note (Phase 1):** only `equal` mode persists
+ * end-to-end via the existing sharedWith + shareCount columns. The
+ * other three modes are wired into the live UI (so the user can
+ * preview how the breakdown will look) but show a notice that the
+ * per-amount breakdown is preview-only until the `split_details`
+ * JSON column lands on transactions. Save still works — it falls
+ * back to an equal split with the same participants.
+ */
+function SplitPane({
+  totalAmount,
+  sharedWith,
+  shareCount,
+  splitMethod,
+  setSplitMethod,
+  splitEntries,
+  setSplitEntries,
+  paidBy,
+  setPaidBy,
+  onOpenFriendPicker,
+  onClose,
+}: {
+  totalAmount: number;
+  sharedWith: string[];
+  shareCount: number;
+  splitMethod: SplitMethod;
+  setSplitMethod: (m: SplitMethod) => void;
+  splitEntries: Map<string, number>;
+  setSplitEntries: React.Dispatch<React.SetStateAction<Map<string, number>>>;
+  paidBy: string | null;
+  setPaidBy: (p: string | null) => void;
+  onOpenFriendPicker: () => void;
+  onClose: () => void;
+}) {
+  // "You" is the implicit user; remaining slots are named friends.
+  // We use the literal string "You" as the key in splitEntries to
+  // avoid clashing with a hypothetical friend named "You".
+  const YOU_KEY = "__you__";
+  const participants = useMemo(
+    () => [YOU_KEY, ...sharedWith],
+    [sharedWith],
+  );
+  const ways = Math.max(shareCount, sharedWith.length + 1, 2);
+
+  // Per-participant rupee shares, computed from the active method.
+  // For equal, ignore splitEntries and just divide. For others,
+  // look up the entry value and translate to rupees if needed.
+  const computedShares = useMemo(() => {
+    const map = new Map<string, number>();
+    if (splitMethod === "equal") {
+      const each = totalAmount / ways;
+      participants.forEach((p) => map.set(p, each));
+    } else if (splitMethod === "exact") {
+      participants.forEach((p) => map.set(p, splitEntries.get(p) ?? 0));
+    } else if (splitMethod === "percent") {
+      participants.forEach((p) => {
+        const pct = splitEntries.get(p) ?? 0;
+        map.set(p, (totalAmount * pct) / 100);
+      });
+    } else if (splitMethod === "shares") {
+      const totalShares = participants.reduce(
+        (s, p) => s + (splitEntries.get(p) ?? 0),
+        0,
+      );
+      participants.forEach((p) => {
+        const sh = splitEntries.get(p) ?? 0;
+        map.set(p, totalShares > 0 ? (totalAmount * sh) / totalShares : 0);
+      });
+    }
+    return map;
+  }, [participants, splitMethod, splitEntries, totalAmount, ways]);
+
+  // Remaining indicator. Only relevant for modes the user has to
+  // make sum to a target — equal and shares are auto-balanced.
+  const remaining = useMemo(() => {
+    if (splitMethod === "equal" || splitMethod === "shares") return null;
+    let sum = 0;
+    participants.forEach((p) => (sum += splitEntries.get(p) ?? 0));
+    if (splitMethod === "exact") {
+      return { value: totalAmount - sum, target: totalAmount, kind: "inr" as const };
+    }
+    return { value: 100 - sum, target: 100, kind: "pct" as const };
+  }, [participants, splitMethod, splitEntries, totalAmount]);
+
+  const updateEntry = useCallback(
+    (name: string, raw: string) => {
+      setSplitEntries((prev) => {
+        const next = new Map(prev);
+        const n = parseFloat(raw);
+        if (raw === "" || Number.isNaN(n)) next.delete(name);
+        else next.set(name, n);
+        return next;
+      });
+    },
+    [setSplitEntries],
+  );
+
+  // "Even up" auto-fills the remaining slots in exact/percent so the
+  // total matches exactly. Useful when the user has set a few rows
+  // and wants the rest distributed evenly.
+  const evenUpRemaining = useCallback(() => {
+    if (splitMethod !== "exact" && splitMethod !== "percent") return;
+    const target = splitMethod === "exact" ? totalAmount : 100;
+    let used = 0;
+    const filled: string[] = [];
+    const empty: string[] = [];
+    participants.forEach((p) => {
+      const v = splitEntries.get(p);
+      if (v != null && v > 0) {
+        used += v;
+        filled.push(p);
+      } else {
+        empty.push(p);
+      }
+    });
+    const remainingValue = target - used;
+    if (empty.length === 0 || remainingValue <= 0) return;
+    const share = remainingValue / empty.length;
+    setSplitEntries((prev) => {
+      const next = new Map(prev);
+      empty.forEach((p) => next.set(p, share));
+      return next;
+    });
+  }, [splitMethod, totalAmount, participants, splitEntries, setSplitEntries]);
+
+  const labelFor = (p: string) => (p === YOU_KEY ? "You" : p);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <header style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <Ico name="users" size={14} className="muted" />
+        <span className="eyebrow" style={{ flex: 1 }}>
+          Customize split
+        </span>
+        <button
+          type="button"
+          className="btn btn-sm ghost"
+          onClick={onClose}
+          aria-label="Close split pane"
+          style={{ padding: "2px 8px" }}
+        >
+          <Ico name="x" size={12} />
+        </button>
+      </header>
+
+      {/* Method tabs */}
+      <div
+        role="tablist"
+        aria-label="Split method"
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr 1fr 1fr",
+          gap: 4,
+          padding: 3,
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          borderRadius: 8,
+        }}
+      >
+        {(
+          [
+            { id: "equal" as const, label: "Equal", hint: "Split evenly across everyone" },
+            { id: "exact" as const, label: "Exact", hint: "Specify rupee amount per person" },
+            { id: "percent" as const, label: "Percent", hint: "Specify percentage per person" },
+            { id: "shares" as const, label: "Shares", hint: "Assign weighted shares per person" },
+          ]
+        ).map((m) => {
+          const active = splitMethod === m.id;
+          return (
+            <button
+              key={m.id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              title={m.hint}
+              onClick={() => setSplitMethod(m.id)}
+              style={{
+                padding: "6px 8px",
+                background: active ? "var(--surface-2)" : "transparent",
+                border: `1px solid ${
+                  active ? "var(--border-strong)" : "transparent"
+                }`,
+                borderRadius: 6,
+                color: active ? "var(--fg)" : "var(--muted)",
+                fontSize: 11.5,
+                fontFamily: "inherit",
+                cursor: "pointer",
+                transition:
+                  "background 140ms var(--ease-out), color 140ms var(--ease-out), border-color 140ms var(--ease-out)",
+              }}
+            >
+              {m.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Total bill */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+          padding: "8px 10px",
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          borderRadius: 8,
+        }}
+      >
+        <span
+          className="eyebrow"
+          style={{ fontSize: 10.5, letterSpacing: "0.05em" }}
+        >
+          Total bill
+        </span>
+        <span className="num-amount tabular" style={{ fontSize: 18 }}>
+          {fmtInr(totalAmount)}
+        </span>
+      </div>
+
+      {/* Participant rows */}
+      <Field label={`Participants · ${participants.length}`}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
+          {participants.map((p) => {
+            const share = computedShares.get(p) ?? 0;
+            const entry = splitEntries.get(p);
+            const isYou = p === YOU_KEY;
+            return (
+              <div
+                key={p}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr auto auto",
+                  gap: 8,
+                  alignItems: "center",
+                  padding: "8px 10px",
+                  background: "var(--surface)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 8,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 2,
+                    minWidth: 0,
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: 13,
+                      color: isYou ? "var(--fg)" : "var(--fg-2)",
+                      fontWeight: isYou ? 500 : 400,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {labelFor(p)}
+                    {isYou && (
+                      <span
+                        className="tiny"
+                        style={{ marginLeft: 6, color: "var(--muted-2)" }}
+                      >
+                        (anchor)
+                      </span>
+                    )}
+                  </span>
+                  <span className="tiny" style={{ color: "var(--muted-2)" }}>
+                    {fmtInr(share)}
+                    {splitMethod === "percent" && entry != null && (
+                      <> · {entry}% of total</>
+                    )}
+                    {splitMethod === "shares" && entry != null && (
+                      <> · {entry} share{entry === 1 ? "" : "s"}</>
+                    )}
+                  </span>
+                </div>
+
+                {/* Input — only shown for editable modes. Equal is
+                    read-only since each gets total / ways. */}
+                {splitMethod !== "equal" && (
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={entry ?? ""}
+                    onChange={(e) => updateEntry(p, e.target.value)}
+                    placeholder={
+                      splitMethod === "exact"
+                        ? Math.round(totalAmount / ways).toString()
+                        : splitMethod === "percent"
+                          ? Math.round(100 / ways).toString()
+                          : "1"
+                    }
+                    aria-label={`${labelFor(p)} ${splitMethod} value`}
+                    style={{
+                      width: 80,
+                      padding: "5px 8px",
+                      background: "var(--surface-2)",
+                      border: "1px solid var(--border)",
+                      borderRadius: 6,
+                      color: "var(--fg)",
+                      fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                      fontSize: 12,
+                      textAlign: "right",
+                    }}
+                  />
+                )}
+
+                {/* Unit suffix on the right of the input. */}
+                <span
+                  className="tiny mono"
+                  style={{
+                    color: "var(--muted-2)",
+                    minWidth: 14,
+                    textAlign: "left",
+                  }}
+                >
+                  {splitMethod === "exact"
+                    ? "₹"
+                    : splitMethod === "percent"
+                      ? "%"
+                      : splitMethod === "shares"
+                        ? "×"
+                        : ""}
+                </span>
+              </div>
+            );
+          })}
+
+          {/* Add-friend action — opens the existing friend picker so
+              the user can extend the participant list without
+              leaving the pane. */}
+          <button
+            type="button"
+            onClick={() => {
+              onOpenFriendPicker();
+              onClose();
+            }}
+            className="btn btn-sm ghost"
+            style={{
+              justifyContent: "flex-start",
+              padding: "8px 10px",
+              border: "1px dashed var(--border)",
+              borderRadius: 8,
+              color: "var(--muted)",
+              fontSize: 12,
+            }}
+            title="Open friend picker (F)"
+          >
+            <Ico name="plus" size={12} /> Add a friend
+          </button>
+        </div>
+      </Field>
+
+      {/* Live remaining + even-up action for exact/percent */}
+      {remaining && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            padding: "8px 10px",
+            background:
+              Math.abs(remaining.value) < 0.005
+                ? "color-mix(in srgb, var(--credit) 8%, transparent)"
+                : "color-mix(in srgb, var(--warn) 8%, transparent)",
+            border: `1px solid ${
+              Math.abs(remaining.value) < 0.005
+                ? "color-mix(in srgb, var(--credit) 30%, transparent)"
+                : "color-mix(in srgb, var(--warn) 30%, transparent)"
+            }`,
+            borderRadius: 8,
+          }}
+        >
+          <span
+            aria-hidden
+            style={{
+              display: "inline-flex",
+              color:
+                Math.abs(remaining.value) < 0.005
+                  ? "var(--credit)"
+                  : "var(--warn)",
+            }}
+          >
+            <Ico
+              name={Math.abs(remaining.value) < 0.005 ? "check" : "minus"}
+              size={12}
+            />
+          </span>
+          <span
+            className="small"
+            style={{
+              flex: 1,
+              color:
+                Math.abs(remaining.value) < 0.005
+                  ? "var(--credit)"
+                  : "var(--warn)",
+            }}
+          >
+            {Math.abs(remaining.value) < 0.005
+              ? "Balanced"
+              : remaining.value > 0
+                ? `${remaining.kind === "inr" ? fmtInr(remaining.value) : `${remaining.value.toFixed(1)}%`} left to assign`
+                : `${remaining.kind === "inr" ? fmtInr(-remaining.value) : `${(-remaining.value).toFixed(1)}%`} over`}
+          </span>
+          {Math.abs(remaining.value) >= 0.005 && remaining.value > 0 && (
+            <button
+              type="button"
+              className="btn btn-sm ghost"
+              onClick={evenUpRemaining}
+              style={{ padding: "2px 8px", fontSize: 11 }}
+            >
+              Even up
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Paid by selector */}
+      <Field label="Paid by">
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 5,
+            marginTop: 5,
+          }}
+        >
+          {[null, ...sharedWith].map((p) => {
+            const on = paidBy === p;
+            const label = p === null ? "You" : p;
+            return (
+              <button
+                key={p ?? "__you__"}
+                type="button"
+                onClick={() => setPaidBy(p)}
+                className="chip"
+                style={{
+                  background: on ? "var(--accent-soft)" : "transparent",
+                  borderColor: on ? "var(--accent-line)" : "var(--border)",
+                  color: on ? "var(--accent)" : "var(--fg-2)",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                }}
+              >
+                {on && <Ico name="check" size={11} />}
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </Field>
+
+      {/* Persistence notice for non-equal modes — phase-1 honesty. */}
+      {splitMethod !== "equal" && (
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            padding: "8px 10px",
+            background: "var(--surface)",
+            border: "1px dashed var(--border)",
+            borderRadius: 8,
+          }}
+        >
+          <Ico name="sparkles" size={12} className="muted-2" />
+          <span className="tiny" style={{ color: "var(--muted)", flex: 1 }}>
+            Preview — per-person breakdown for{" "}
+            <b style={{ fontWeight: 500 }}>{splitMethod}</b> mode is shown
+            live, but Save still records this as an equal{" "}
+            {Math.max(shareCount, sharedWith.length + 1)}-way split
+            until the split-details schema lands.
+          </span>
+        </div>
+      )}
     </div>
   );
 }
