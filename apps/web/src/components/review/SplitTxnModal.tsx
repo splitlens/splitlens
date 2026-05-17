@@ -50,6 +50,14 @@ import {
   type MerchantRecallContext,
 } from "@/app/review/actions";
 
+/** Shape of a single nav entry surfaced by the strips/pickers. */
+type NavEntry = { name: string; firstIndex: number; count: number };
+
+/** Discriminant for which strip's picker is open. The two pickers are
+ *  mutually exclusive — opening one closes the other so the user is
+ *  never juggling two open menus inside the same modal. */
+type PickerDim = "category" | "merchant";
+
 export function SplitTxnModal({
   row,
   people,
@@ -65,6 +73,12 @@ export function SplitTxnModal({
   onPrevCategory,
   onNextCategory,
   onJumpToCategory,
+  merchant,
+  merchantNav,
+  merchantNavIdx,
+  onPrevMerchant,
+  onNextMerchant,
+  onJumpToMerchant,
 }: {
   row: SplitQueueRow;
   people: Array<{
@@ -92,7 +106,7 @@ export function SplitTxnModal({
    *  Used to drive the [/] keyboard jumps and the click-name picker.
    *  `firstIndex` is each category's first position in the flat queue
    *  — that's where category-jump lands. */
-  categoryNav: Array<{ name: string; firstIndex: number; count: number }>;
+  categoryNav: NavEntry[];
   /** Index of the active row's category within categoryNav. -1 means
    *  the category isn't in the queue (shouldn't happen in practice).
    *  Used to disable prev/next buttons at the ends. */
@@ -100,6 +114,21 @@ export function SplitTxnModal({
   onPrevCategory: () => void;
   onNextCategory: () => void;
   onJumpToCategory: (name: string) => void;
+  /** Merchant-grouped nav context. Same shape as `category` but the
+   *  group dimension is counterparty name. Merchants repeat across
+   *  categories in the queue, so positionInMerchant counts the
+   *  active row's place across the WHOLE flat queue (not within a
+   *  single category). */
+  merchant: {
+    name: string;
+    positionInMerchant: number;
+    totalInMerchant: number;
+  };
+  merchantNav: NavEntry[];
+  merchantNavIdx: number;
+  onPrevMerchant: () => void;
+  onNextMerchant: () => void;
+  onJumpToMerchant: (name: string) => void;
 }) {
   // Local form state — initialized from the row's current values.
   // Recurrence lives in the categorization modal (InboxModal at
@@ -119,31 +148,41 @@ export function SplitTxnModal({
   // full ReviewTransactionDetail then. Cached per-row so re-opening
   // is instant.
   const [detailOpen, setDetailOpen] = useState(false);
-  // Category-picker popover state. Toggled by clicking the category
-  // name in the strip or pressing C. Always closed on mount so the
-  // initial frame is clean.
-  const [pickerOpen, setPickerOpen] = useState(false);
-  // Highlighted row in the picker — what Enter would select. Starts
-  // on the active category each time the picker opens, then ↑/↓
-  // moves it independently of the underlying txn's category. Split
-  // from `categoryNavIdx` so the "currently active" row (check mark)
-  // stays anchored on the txn's actual category while the keyboard
-  // highlight roams.
+  // Picker popover state. `activePicker` discriminates between the
+  // category strip's picker and the merchant strip's picker; only
+  // one can be open at a time so the user is never juggling two
+  // menus inside the same modal. `pickerIndex` is the keyboard
+  // highlight position within whichever list is currently active;
+  // it resets each time the active picker changes (sync useEffect
+  // below).
+  const [activePicker, setActivePicker] = useState<PickerDim | null>(null);
   const [pickerIndex, setPickerIndex] = useState(0);
   const pickerListRef = useRef<HTMLDivElement | null>(null);
-  // Close the picker whenever the row changes — otherwise it floats
-  // over the wrong category after [/]/arrow nav.
+  const pickerOpen = activePicker !== null;
+  // Active list / current-idx / jump callback derived from the
+  // discriminant. Keeps the keyboard handler dim-agnostic.
+  const activeList = activePicker === "merchant" ? merchantNav : categoryNav;
+  const activeIdx = activePicker === "merchant" ? merchantNavIdx : categoryNavIdx;
+  const onActivePickerJump = useCallback(
+    (name: string) => {
+      if (activePicker === "merchant") onJumpToMerchant(name);
+      else onJumpToCategory(name);
+    },
+    [activePicker, onJumpToCategory, onJumpToMerchant],
+  );
+  // Close any open picker whenever the row changes — otherwise it
+  // floats over the wrong category/merchant after nav.
   useEffect(() => {
-    setPickerOpen(false);
+    setActivePicker(null);
   }, [row.id]);
-  // Sync the keyboard highlight to the active category each time the
-  // picker opens. Clamp to [0, len-1] in case the queue rebuilt while
-  // the modal was alive.
+  // Sync the keyboard highlight to the active row each time the
+  // picker opens (or swaps dimensions). Clamp to [0, len-1] in case
+  // the underlying list rebuilt while the modal was alive.
   useEffect(() => {
     if (!pickerOpen) return;
-    const start = Math.max(0, Math.min(categoryNav.length - 1, categoryNavIdx));
+    const start = Math.max(0, Math.min(activeList.length - 1, activeIdx));
     setPickerIndex(start < 0 ? 0 : start);
-  }, [pickerOpen, categoryNavIdx, categoryNav.length]);
+  }, [activePicker, pickerOpen, activeIdx, activeList.length]);
   // Scroll the highlighted row into view inside the (scrollable)
   // picker container. `block: "nearest"` keeps the highlight inside
   // the viewport without yanking it to center, so consecutive ↑/↓
@@ -201,6 +240,22 @@ export function SplitTxnModal({
     }
     prevCategoryRef.current = category.name;
   }, [category.name]);
+
+  // Same pulse for merchant changes. Fires more often than category
+  // (within a single category, multiple merchants show up), so the
+  // visual cue is more useful for "wait, did I jump merchants?".
+  const prevMerchantRef = useRef<string | null>(null);
+  const [merchantChanged, setMerchantChanged] = useState(false);
+  useEffect(() => {
+    const prev = prevMerchantRef.current;
+    if (prev !== null && prev !== merchant.name) {
+      setMerchantChanged(true);
+      const t = window.setTimeout(() => setMerchantChanged(false), 700);
+      prevMerchantRef.current = merchant.name;
+      return () => window.clearTimeout(t);
+    }
+    prevMerchantRef.current = merchant.name;
+  }, [merchant.name]);
 
   // Reset state whenever the txn changes (when Prev/Next swaps the
   // row out from under us).
@@ -292,21 +347,27 @@ export function SplitTxnModal({
   );
 
   // Keyboard map.
-  //   Default (picker closed):
+  //   Default (no picker open):
   //     Enter       → save & advance
   //     Esc         → close modal
   //     ←/→         → prev/next txn
   //     /           → skip (same as →)
   //     Space       → toggle detail pane
   //     [ / ]       → prev/next category jump
+  //     { / }       → prev/next merchant jump (Shift + [/])
   //     C           → open category picker
+  //     M           → open merchant picker
   //     S           → apply suggested split
   //     J           → just me
-  //   Picker mode (picker open) — list-nav focus:
+  //   Picker mode (any picker open) — list-nav focus:
   //     ↑ / ↓       → move highlight
-  //     Home/End    → first/last category
-  //     Enter       → jump to highlighted category + close
-  //     Esc / C     → close picker
+  //     Home/End    → first/last item
+  //     Enter       → jump to highlighted item + close picker
+  //     Esc         → close picker
+  //     C           → toggle to category picker (or close if already
+  //                   on category)
+  //     M           → toggle to merchant picker (or close if already
+  //                   on merchant)
   //     all others  → trapped (don't change the underlying txn while
   //                   the user is mid-pick)
   useEffect(() => {
@@ -326,7 +387,7 @@ export function SplitTxnModal({
         if (e.key === "ArrowDown") {
           e.preventDefault();
           setPickerIndex((i) =>
-            Math.min(categoryNav.length - 1, i + 1),
+            Math.min(activeList.length - 1, i + 1),
           );
           return;
         }
@@ -337,23 +398,32 @@ export function SplitTxnModal({
         }
         if (e.key === "End") {
           e.preventDefault();
-          setPickerIndex(Math.max(0, categoryNav.length - 1));
+          setPickerIndex(Math.max(0, activeList.length - 1));
           return;
         }
         if (e.key === "Enter") {
           e.preventDefault();
-          const target = categoryNav[pickerIndex];
-          if (target) onJumpToCategory(target.name);
-          setPickerOpen(false);
+          const target = activeList[pickerIndex];
+          if (target) onActivePickerJump(target.name);
+          setActivePicker(null);
           return;
         }
-        if (
-          e.key === "Escape" ||
-          e.key === "c" ||
-          e.key === "C"
-        ) {
+        if (e.key === "Escape") {
           e.preventDefault();
-          setPickerOpen(false);
+          setActivePicker(null);
+          return;
+        }
+        // C and M toggle dimensions: re-pressing the same key closes
+        // the picker, pressing the other key swaps to that dimension
+        // without an intermediate close.
+        if (e.key === "c" || e.key === "C") {
+          e.preventDefault();
+          setActivePicker((cur) => (cur === "category" ? null : "category"));
+          return;
+        }
+        if (e.key === "m" || e.key === "M") {
+          e.preventDefault();
+          setActivePicker((cur) => (cur === "merchant" ? null : "merchant"));
           return;
         }
         // Trap any other key that would normally mutate the txn or
@@ -366,6 +436,8 @@ export function SplitTxnModal({
           e.code === "Space" ||
           e.key === "[" ||
           e.key === "]" ||
+          e.key === "{" ||
+          e.key === "}" ||
           e.key === "/" ||
           e.key === "s" ||
           e.key === "S" ||
@@ -401,9 +473,18 @@ export function SplitTxnModal({
       } else if (e.key === "]") {
         e.preventDefault();
         onNextCategory();
+      } else if (e.key === "{") {
+        e.preventDefault();
+        onPrevMerchant();
+      } else if (e.key === "}") {
+        e.preventDefault();
+        onNextMerchant();
       } else if (e.key === "c" || e.key === "C") {
         e.preventDefault();
-        setPickerOpen(true);
+        setActivePicker("category");
+      } else if (e.key === "m" || e.key === "M") {
+        e.preventDefault();
+        setActivePicker("merchant");
       } else if (e.key === "s" || e.key === "S") {
         e.preventDefault();
         applySuggested();
@@ -421,12 +502,14 @@ export function SplitTxnModal({
     onNext,
     onPrevCategory,
     onNextCategory,
-    onJumpToCategory,
+    onPrevMerchant,
+    onNextMerchant,
+    onActivePickerJump,
     applySuggested,
     setJustMe,
     pickerOpen,
     pickerIndex,
-    categoryNav,
+    activeList,
   ]);
 
   const sortedPeople = useMemo(
@@ -463,7 +546,7 @@ export function SplitTxnModal({
             // picker — its own handler stops propagation) closes the
             // picker. Keeps the picker feeling like a transient
             // popover rather than a modal-within-a-modal.
-            if (pickerOpen) setPickerOpen(false);
+            if (pickerOpen) setActivePicker(null);
           }}
           initial={{ opacity: 0, y: 16, scale: 0.98 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -527,276 +610,66 @@ export function SplitTxnModal({
             </button>
           </header>
 
-          {/* Category strip — shows progress within the active
-              category, lets the user jump between categories via
-              prev/next chevrons or the clickable name (opens a
-              picker dropdown). Pulses accent when the category
-              changes between rows so the user sees the transition.
-              `position: relative` so the picker popover anchors to
-              this strip. */}
-          <div
-            style={{
-              padding: "10px 22px",
-              borderBottom: "1px solid var(--border)",
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              background: categoryChanged
-                ? "var(--accent-soft)"
-                : "var(--surface-2)",
-              transition:
-                "background 600ms var(--ease-out-expo)",
-              position: "relative",
-            }}
-          >
-            <Ico
-              name="filter"
-              size={13}
-              className={categoryChanged ? "accent" : "muted"}
-            />
-            {/* Prev category */}
-            <button
-              type="button"
-              onClick={onPrevCategory}
-              disabled={categoryNavIdx <= 0}
-              title="Previous category ([)"
-              aria-label="Previous category"
-              className="btn btn-sm ghost"
-              style={{
-                padding: "2px 5px",
-                opacity: categoryNavIdx <= 0 ? 0.35 : 1,
-              }}
-            >
-              <Ico name="chevron-left" size={11} />
-            </button>
-            {/* Clickable category name → opens picker */}
-            <button
-              type="button"
-              onClick={() => setPickerOpen((v) => !v)}
-              aria-expanded={pickerOpen}
-              aria-haspopup="listbox"
-              title="Jump to category (C)"
-              className="eyebrow"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-                padding: "2px 8px",
-                background: pickerOpen
-                  ? "var(--surface)"
-                  : "transparent",
-                border: `1px solid ${
-                  pickerOpen ? "var(--border-strong)" : "transparent"
-                }`,
-                borderRadius: 6,
-                color: categoryChanged ? "var(--accent)" : "var(--muted)",
-                fontFamily: "inherit",
-                fontSize: 11,
-                letterSpacing: "0.05em",
-                cursor: "pointer",
-                transition:
-                  "color 600ms var(--ease-out-expo), background 140ms var(--ease-out), border-color 140ms var(--ease-out)",
-              }}
-            >
-              {category.name}
-              <span
-                aria-hidden
-                style={{
-                  display: "inline-flex",
-                  transform: pickerOpen ? "rotate(180deg)" : "rotate(0deg)",
-                  transition: "transform 180ms var(--ease-out)",
-                }}
-              >
-                <Ico name="chevron-down" size={10} />
-              </span>
-            </button>
-            {/* Next category */}
-            <button
-              type="button"
-              onClick={onNextCategory}
-              disabled={categoryNavIdx < 0 || categoryNavIdx >= categoryNav.length - 1}
-              title="Next category (])"
-              aria-label="Next category"
-              className="btn btn-sm ghost"
-              style={{
-                padding: "2px 5px",
-                opacity:
-                  categoryNavIdx < 0 ||
-                  categoryNavIdx >= categoryNav.length - 1
-                    ? 0.35
-                    : 1,
-              }}
-            >
-              <Ico name="chevron-right" size={11} />
-            </button>
-            <span
-              className="mono tabular"
-              style={{
-                fontSize: 11.5,
-                color: "var(--muted-2)",
-                marginLeft: "auto",
-              }}
-            >
-              {category.positionInCategory} of {category.totalInCategory}{" "}
-              in this category
-            </span>
-            {/* Progress bar within category */}
-            <div
-              aria-hidden
-              style={{
-                width: 80,
-                height: 3,
-                background: "var(--surface-3)",
-                borderRadius: 2,
-                overflow: "hidden",
-              }}
-            >
-              <div
-                style={{
-                  width: `${
-                    category.totalInCategory > 0
-                      ? (category.positionInCategory /
-                          category.totalInCategory) *
-                        100
-                      : 0
-                  }%`,
-                  height: "100%",
-                  background: "var(--accent)",
-                  transition: "width 220ms var(--ease-out)",
-                }}
-              />
-            </div>
+          {/* Category strip — group-by-category nav (jump prev/next,
+              click to pick from list). Pulses accent when the
+              category changes between rows so the user sees the
+              transition. */}
+          <NavStrip
+            iconName="filter"
+            groupLabel="category"
+            groupName={category.name}
+            positionInGroup={category.positionInCategory}
+            totalInGroup={category.totalInCategory}
+            navList={categoryNav}
+            navIdx={categoryNavIdx}
+            changed={categoryChanged}
+            isPickerOpen={activePicker === "category"}
+            onTogglePicker={() =>
+              setActivePicker((cur) => (cur === "category" ? null : "category"))
+            }
+            onClosePicker={() => setActivePicker(null)}
+            pickerIndex={pickerIndex}
+            setPickerIndex={setPickerIndex}
+            pickerListRef={pickerListRef}
+            onPrev={onPrevCategory}
+            onNext={onNextCategory}
+            onJumpTo={onJumpToCategory}
+            shortcutPrev="["
+            shortcutNext="]"
+            shortcutPick="C"
+            pickerKeyPrefix="cat"
+          />
 
-            {/* Picker popover. Anchored to the strip, drops down over
-                the body. The body has overflow:hidden upstream but
-                the popover stays within the modal bounds so it
-                renders cleanly without portal logic. */}
-            <AnimatePresence>
-              {pickerOpen && (
-                <motion.div
-                  key="cat-picker"
-                  ref={pickerListRef}
-                  role="listbox"
-                  aria-label="Jump to category"
-                  aria-activedescendant={
-                    categoryNav[pickerIndex]
-                      ? `cat-opt-${pickerIndex}`
-                      : undefined
-                  }
-                  initial={{ opacity: 0, y: -4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -4 }}
-                  transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
-                  onClick={(e) => e.stopPropagation()}
-                  onMouseDown={(e) => e.stopPropagation()}
-                  style={{
-                    position: "absolute",
-                    top: "calc(100% + 6px)",
-                    left: 40,
-                    zIndex: 5,
-                    minWidth: 280,
-                    maxWidth: 360,
-                    maxHeight: 320,
-                    overflowY: "auto",
-                    background: "var(--surface)",
-                    border: "1px solid var(--border-strong)",
-                    borderRadius: 10,
-                    boxShadow: "0 10px 40px rgba(0,0,0,0.45)",
-                    padding: 4,
-                  }}
-                >
-                  {categoryNav.length === 0 && (
-                    <div className="small muted" style={{ padding: 10 }}>
-                      No categories in this queue.
-                    </div>
-                  )}
-                  {/* Two states per row:
-                       isCurrent — the txn's actual category (check)
-                       isHighlighted — where ↑/↓ has the keyboard
-                         focus right now (accent-soft background).
-                       Splitting them keeps the "you are here" anchor
-                       stable while the keyboard highlight roams. */}
-                  {categoryNav.map((c, i) => {
-                    const isCurrent = i === categoryNavIdx;
-                    const isHighlighted = i === pickerIndex;
-                    return (
-                      <button
-                        key={c.name}
-                        id={`cat-opt-${i}`}
-                        data-picker-idx={i}
-                        type="button"
-                        role="option"
-                        aria-selected={isHighlighted}
-                        onMouseEnter={() => setPickerIndex(i)}
-                        onClick={() => {
-                          onJumpToCategory(c.name);
-                          setPickerOpen(false);
-                        }}
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: "14px 1fr auto",
-                          gap: 10,
-                          alignItems: "center",
-                          width: "100%",
-                          padding: "8px 10px",
-                          background: isHighlighted
-                            ? "var(--accent-soft)"
-                            : "transparent",
-                          border: `1px solid ${
-                            isHighlighted
-                              ? "var(--accent-line)"
-                              : "transparent"
-                          }`,
-                          borderRadius: 6,
-                          color: isHighlighted
-                            ? "var(--accent)"
-                            : isCurrent
-                              ? "var(--fg)"
-                              : "var(--fg)",
-                          fontWeight: isCurrent ? 500 : 400,
-                          fontFamily: "inherit",
-                          fontSize: 13,
-                          textAlign: "left",
-                          cursor: "pointer",
-                          transition:
-                            "background 100ms var(--ease-out), border-color 100ms var(--ease-out)",
-                        }}
-                      >
-                        <span aria-hidden>
-                          {isCurrent && (
-                            <Ico
-                              name="check"
-                              size={11}
-                              className={isHighlighted ? "" : "accent"}
-                            />
-                          )}
-                        </span>
-                        <span
-                          style={{
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {c.name}
-                        </span>
-                        <span
-                          className="mono tabular tiny"
-                          style={{
-                            color: isHighlighted
-                              ? "var(--accent)"
-                              : "var(--muted-2)",
-                          }}
-                        >
-                          {c.count}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
+          {/* Merchant strip — same UX as category, group dimension is
+              counterparty. Lets the user walk merchant-by-merchant
+              within a category, jump to "next merchant in queue",
+              or pick a specific merchant from the dropdown. */}
+          <NavStrip
+            iconName="user"
+            groupLabel="merchant"
+            groupName={merchant.name}
+            positionInGroup={merchant.positionInMerchant}
+            totalInGroup={merchant.totalInMerchant}
+            navList={merchantNav}
+            navIdx={merchantNavIdx}
+            changed={merchantChanged}
+            isPickerOpen={activePicker === "merchant"}
+            onTogglePicker={() =>
+              setActivePicker((cur) => (cur === "merchant" ? null : "merchant"))
+            }
+            onClosePicker={() => setActivePicker(null)}
+            pickerIndex={pickerIndex}
+            setPickerIndex={setPickerIndex}
+            pickerListRef={pickerListRef}
+            onPrev={onPrevMerchant}
+            onNext={onNextMerchant}
+            onJumpTo={onJumpToMerchant}
+            shortcutPrev="{"
+            shortcutNext="}"
+            shortcutPick="M"
+            pickerKeyPrefix="merchant"
+          />
+
 
           {/* Body — two-pane when detail is open. Left: existing form.
               Right: detail pane (raw narration, account, sources, etc). */}
@@ -1195,6 +1068,7 @@ export function SplitTxnModal({
                 <>
                   <span className="kbd">↑</span>/<span className="kbd">↓</span> highlight ·{" "}
                   <span className="kbd">↵</span> jump ·{" "}
+                  <span className="kbd">C</span>/<span className="kbd">M</span> swap ·{" "}
                   <span className="kbd">Esc</span> close picker
                 </>
               ) : (
@@ -1204,7 +1078,8 @@ export function SplitTxnModal({
                   <span className="kbd">J</span> just me ·{" "}
                   <span className="kbd">Space</span> detail ·{" "}
                   <span className="kbd">[</span>/<span className="kbd">]</span> cat ·{" "}
-                  <span className="kbd">C</span> pick ·{" "}
+                  <span className="kbd">&#123;</span>/<span className="kbd">&#125;</span> merch ·{" "}
+                  <span className="kbd">C</span>/<span className="kbd">M</span> pick ·{" "}
                   <span className="kbd">Esc</span> close
                 </>
               )}
@@ -1230,6 +1105,322 @@ export function SplitTxnModal({
         </motion.div>
       </motion.div>
     </AnimatePresence>
+  );
+}
+
+/**
+ * NavStrip — group-nav row rendered inside the modal header.
+ * Used for both the category and the merchant dimensions. Renders:
+ *
+ *   [icon] [<] [GROUP NAME ▾] [>]    N of M in this <label>  [progress]
+ *                ▼ (picker popover, when open)
+ *
+ * Two strip instances share the same `pickerIndex` and `pickerListRef`
+ * upstream — they're mutually exclusive (only one can be the active
+ * picker at a time), so a single set of picker state is enough.
+ * The component itself is presentational; the parent decides which
+ * strip is "the active picker" via `isPickerOpen`.
+ */
+function NavStrip({
+  iconName,
+  groupLabel,
+  groupName,
+  positionInGroup,
+  totalInGroup,
+  navList,
+  navIdx,
+  changed,
+  isPickerOpen,
+  onTogglePicker,
+  onClosePicker,
+  pickerIndex,
+  setPickerIndex,
+  pickerListRef,
+  onPrev,
+  onNext,
+  onJumpTo,
+  shortcutPrev,
+  shortcutNext,
+  shortcutPick,
+  pickerKeyPrefix,
+}: {
+  iconName: "filter" | "user";
+  /** Display word for the group dimension, e.g. "category" or
+   *  "merchant". Used in the "N of M in this <label>" caption and
+   *  in the picker's empty-state copy. */
+  groupLabel: string;
+  groupName: string;
+  positionInGroup: number;
+  totalInGroup: number;
+  navList: NavEntry[];
+  navIdx: number;
+  /** Pulse the strip background when the group value changed
+   *  between consecutive txns (separate per strip — category
+   *  changes less often than merchant). */
+  changed: boolean;
+  isPickerOpen: boolean;
+  onTogglePicker: () => void;
+  onClosePicker: () => void;
+  pickerIndex: number;
+  setPickerIndex: (i: number) => void;
+  /** Ref attached to the picker `<motion.div>` only when this strip's
+   *  picker is the active one — so scroll-into-view in the parent
+   *  targets the correct list. */
+  pickerListRef: React.MutableRefObject<HTMLDivElement | null>;
+  onPrev: () => void;
+  onNext: () => void;
+  onJumpTo: (name: string) => void;
+  shortcutPrev: string;
+  shortcutNext: string;
+  shortcutPick: string;
+  /** Unique-per-strip prefix for picker option IDs (so the merchant
+   *  picker doesn't collide with the category picker). */
+  pickerKeyPrefix: string;
+}) {
+  const atFirst = navIdx <= 0;
+  const atLast = navIdx < 0 || navIdx >= navList.length - 1;
+  return (
+    <div
+      style={{
+        padding: "10px 22px",
+        borderBottom: "1px solid var(--border)",
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        background: changed ? "var(--accent-soft)" : "var(--surface-2)",
+        transition: "background 600ms var(--ease-out-expo)",
+        position: "relative",
+      }}
+    >
+      <Ico
+        name={iconName}
+        size={13}
+        className={changed ? "accent" : "muted"}
+      />
+      <button
+        type="button"
+        onClick={onPrev}
+        disabled={atFirst}
+        title={`Previous ${groupLabel} (${shortcutPrev})`}
+        aria-label={`Previous ${groupLabel}`}
+        className="btn btn-sm ghost"
+        style={{ padding: "2px 5px", opacity: atFirst ? 0.35 : 1 }}
+      >
+        <Ico name="chevron-left" size={11} />
+      </button>
+      <button
+        type="button"
+        onClick={onTogglePicker}
+        aria-expanded={isPickerOpen}
+        aria-haspopup="listbox"
+        title={`Jump to ${groupLabel} (${shortcutPick})`}
+        className="eyebrow"
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 4,
+          padding: "2px 8px",
+          maxWidth: 280,
+          background: isPickerOpen ? "var(--surface)" : "transparent",
+          border: `1px solid ${
+            isPickerOpen ? "var(--border-strong)" : "transparent"
+          }`,
+          borderRadius: 6,
+          color: changed ? "var(--accent)" : "var(--muted)",
+          fontFamily: "inherit",
+          fontSize: 11,
+          letterSpacing: "0.05em",
+          cursor: "pointer",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          transition:
+            "color 600ms var(--ease-out-expo), background 140ms var(--ease-out), border-color 140ms var(--ease-out)",
+        }}
+      >
+        <span
+          style={{
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {groupName}
+        </span>
+        <span
+          aria-hidden
+          style={{
+            display: "inline-flex",
+            transform: isPickerOpen ? "rotate(180deg)" : "rotate(0deg)",
+            transition: "transform 180ms var(--ease-out)",
+          }}
+        >
+          <Ico name="chevron-down" size={10} />
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={onNext}
+        disabled={atLast}
+        title={`Next ${groupLabel} (${shortcutNext})`}
+        aria-label={`Next ${groupLabel}`}
+        className="btn btn-sm ghost"
+        style={{ padding: "2px 5px", opacity: atLast ? 0.35 : 1 }}
+      >
+        <Ico name="chevron-right" size={11} />
+      </button>
+      <span
+        className="mono tabular"
+        style={{
+          fontSize: 11.5,
+          color: "var(--muted-2)",
+          marginLeft: "auto",
+        }}
+      >
+        {positionInGroup} of {totalInGroup} in this {groupLabel}
+      </span>
+      <div
+        aria-hidden
+        style={{
+          width: 80,
+          height: 3,
+          background: "var(--surface-3)",
+          borderRadius: 2,
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            width: `${
+              totalInGroup > 0 ? (positionInGroup / totalInGroup) * 100 : 0
+            }%`,
+            height: "100%",
+            background: "var(--accent)",
+            transition: "width 220ms var(--ease-out)",
+          }}
+        />
+      </div>
+
+      <AnimatePresence>
+        {isPickerOpen && (
+          <motion.div
+            key={`${pickerKeyPrefix}-picker`}
+            ref={pickerListRef}
+            role="listbox"
+            aria-label={`Jump to ${groupLabel}`}
+            aria-activedescendant={
+              navList[pickerIndex]
+                ? `${pickerKeyPrefix}-opt-${pickerIndex}`
+                : undefined
+            }
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{
+              position: "absolute",
+              top: "calc(100% + 6px)",
+              left: 40,
+              zIndex: 5,
+              minWidth: 280,
+              maxWidth: 360,
+              maxHeight: 320,
+              overflowY: "auto",
+              background: "var(--surface)",
+              border: "1px solid var(--border-strong)",
+              borderRadius: 10,
+              boxShadow: "0 10px 40px rgba(0,0,0,0.45)",
+              padding: 4,
+            }}
+          >
+            {navList.length === 0 && (
+              <div className="small muted" style={{ padding: 10 }}>
+                No {groupLabel}s in this queue.
+              </div>
+            )}
+            {/* Two states per row:
+                 isCurrent — the row's actual group (check + bold)
+                 isHighlighted — where ↑/↓ has the keyboard focus
+                   right now (accent-soft background).
+                 Splitting them keeps the "you are here" anchor stable
+                 while the keyboard highlight roams. */}
+            {navList.map((c, i) => {
+              const isCurrent = i === navIdx;
+              const isHighlighted = i === pickerIndex;
+              return (
+                <button
+                  key={c.name}
+                  id={`${pickerKeyPrefix}-opt-${i}`}
+                  data-picker-idx={i}
+                  type="button"
+                  role="option"
+                  aria-selected={isHighlighted}
+                  onMouseEnter={() => setPickerIndex(i)}
+                  onClick={() => {
+                    onJumpTo(c.name);
+                    onClosePicker();
+                  }}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "14px 1fr auto",
+                    gap: 10,
+                    alignItems: "center",
+                    width: "100%",
+                    padding: "8px 10px",
+                    background: isHighlighted
+                      ? "var(--accent-soft)"
+                      : "transparent",
+                    border: `1px solid ${
+                      isHighlighted ? "var(--accent-line)" : "transparent"
+                    }`,
+                    borderRadius: 6,
+                    color: isHighlighted ? "var(--accent)" : "var(--fg)",
+                    fontWeight: isCurrent ? 500 : 400,
+                    fontFamily: "inherit",
+                    fontSize: 13,
+                    textAlign: "left",
+                    cursor: "pointer",
+                    transition:
+                      "background 100ms var(--ease-out), border-color 100ms var(--ease-out)",
+                  }}
+                >
+                  <span aria-hidden>
+                    {isCurrent && (
+                      <Ico
+                        name="check"
+                        size={11}
+                        className={isHighlighted ? "" : "accent"}
+                      />
+                    )}
+                  </span>
+                  <span
+                    style={{
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {c.name}
+                  </span>
+                  <span
+                    className="mono tabular tiny"
+                    style={{
+                      color: isHighlighted
+                        ? "var(--accent)"
+                        : "var(--muted-2)",
+                    }}
+                  >
+                    {c.count}
+                  </span>
+                </button>
+              );
+            })}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }
 

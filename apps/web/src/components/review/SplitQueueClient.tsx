@@ -362,6 +362,57 @@ export function SplitQueueClient({
     [categoryNav, flat],
   );
 
+  /**
+   * Merchant-jump nav. Same shape as categoryNav but keyed by
+   * counterparty name. Merchants repeat across categories in the
+   * queue (one merchant can appear in many categories), so we
+   * collapse to distinct names and remember the first index in
+   * queue order — that's where the picker / `]` jumps land. Empty
+   * counterparties are dropped (they'd collapse all "unknown" rows
+   * into a single confusing entry).
+   */
+  const merchantNav = useMemo(() => {
+    const seen = new Map<string, { name: string; firstIndex: number; count: number }>();
+    flat.forEach((r, i) => {
+      const name = r.counterparty;
+      if (!name) return;
+      const existing = seen.get(name);
+      if (existing) existing.count += 1;
+      else seen.set(name, { name, firstIndex: i, count: 1 });
+    });
+    return Array.from(seen.values()).sort(
+      (a, b) => a.firstIndex - b.firstIndex,
+    );
+  }, [flat]);
+
+  const goPrevMerchant = useCallback(() => {
+    if (activeId == null) return;
+    const idx = flat.findIndex((r) => r.id === activeId);
+    if (idx < 0) return;
+    const currentName = flat[idx]!.counterparty;
+    const navIdx = merchantNav.findIndex((m) => m.name === currentName);
+    const target = merchantNav[navIdx - 1];
+    if (target) setActiveId(flat[target.firstIndex]!.id);
+  }, [activeId, flat, merchantNav]);
+
+  const goNextMerchant = useCallback(() => {
+    if (activeId == null) return;
+    const idx = flat.findIndex((r) => r.id === activeId);
+    if (idx < 0) return;
+    const currentName = flat[idx]!.counterparty;
+    const navIdx = merchantNav.findIndex((m) => m.name === currentName);
+    const target = merchantNav[navIdx + 1];
+    if (target) setActiveId(flat[target.firstIndex]!.id);
+  }, [activeId, flat, merchantNav]);
+
+  const goToMerchant = useCallback(
+    (name: string) => {
+      const target = merchantNav.find((m) => m.name === name);
+      if (target) setActiveId(flat[target.firstIndex]!.id);
+    },
+    [merchantNav, flat],
+  );
+
   const refresh = useCallback(() => {
     startTransition(() => router.refresh());
   }, [router, startTransition]);
@@ -660,6 +711,17 @@ export function SplitQueueClient({
         const currentNavIdx = categoryNav.findIndex(
           (c) => c.name === activeCat,
         );
+        // Merchant context — mirrors the category context shape so
+        // the modal can render two parallel strips + pickers.
+        const activeMerchant = active.counterparty;
+        const sameMerchant = flat.filter(
+          (r) => r.counterparty === activeMerchant,
+        );
+        const positionInMerchant =
+          sameMerchant.findIndex((r) => r.id === active.id) + 1;
+        const currentMerchantNavIdx = merchantNav.findIndex(
+          (m) => m.name === activeMerchant,
+        );
         return (
           <SplitTxnModal
             row={active}
@@ -683,6 +745,16 @@ export function SplitQueueClient({
             onPrevCategory={goPrevCategory}
             onNextCategory={goNextCategory}
             onJumpToCategory={goToCategory}
+            merchant={{
+              name: activeMerchant,
+              positionInMerchant,
+              totalInMerchant: sameMerchant.length,
+            }}
+            merchantNav={merchantNav}
+            merchantNavIdx={currentMerchantNavIdx}
+            onPrevMerchant={goPrevMerchant}
+            onNextMerchant={goNextMerchant}
+            onJumpToMerchant={goToMerchant}
           />
         );
       })()}
