@@ -12,6 +12,7 @@ import {
 } from "@/lib/repo";
 import { listKnownPeople } from "@/app/friends/actions";
 
+import { Ico } from "@/components/Ico";
 import { KpiTiles } from "@/components/dashboard/KpiTiles";
 import { TimeHeatmap } from "@/components/dashboard/TimeHeatmap";
 import { MonthlyTrajectory } from "@/components/dashboard/MonthlyTrajectory";
@@ -61,76 +62,129 @@ export default async function DashboardPage() {
 
   if (summary.txnCount === 0) {
     return (
-      <main className="mx-auto max-w-2xl px-6 py-20 text-center">
-        <h1 className="text-2xl font-semibold text-zinc-900">No transactions yet</h1>
-        <p className="mt-3 text-zinc-700">
+      <main
+        className="mx-auto flex flex-col items-center justify-center"
+        style={{ maxWidth: 640, padding: "80px 24px", textAlign: "center", gap: 16 }}
+      >
+        <span className="eyebrow eyebrow-accent">Dashboard · empty state</span>
+        <h1 className="display" style={{ fontSize: 36, margin: 0 }}>
+          No transactions yet.
+        </h1>
+        <p className="body" style={{ margin: 0 }}>
           Drop a statement PDF into{" "}
-          <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-sm">
-            ~/Documents/bank/inbox/
-          </code>{" "}
-          and the daemon will ingest it. Then refresh this page.
+          <span className="kbd">~/Documents/bank/inbox/</span> and the daemon
+          will ingest it. Then refresh this page.
         </p>
       </main>
     );
   }
 
   return (
-    <main className="mx-auto max-w-7xl space-y-5 px-4 py-6 sm:px-6 lg:px-8">
-      <header className="flex items-end justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900">Dashboard</h1>
-          <p className="mt-1 text-sm text-zinc-500">
-            {summary.statementCount} statement{summary.statementCount === 1 ? "" : "s"} ·{" "}
-            {summary.txnCount.toLocaleString("en-IN")} transactions ·{" "}
-            {summary.accountCount} account{summary.accountCount === 1 ? "" : "s"}
-          </p>
-        </div>
-      </header>
-
-      {/* Stat strip */}
-      <KpiTiles summary={summary} heatmap={heatmap} daily={daily} />
-
-      {/* Time heatmap + insight callouts */}
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-5">
-        <div className="lg:col-span-3">
-          <TimeHeatmap cells={heatmap} />
-        </div>
-        <div className="lg:col-span-2">
-          <InsightCallouts
-            summary={summary}
-            heatmap={heatmap}
-            daily={daily}
-            monthly={monthly}
-            topCounterparties={topCounterparties}
-          />
+    <main className="flex flex-col" style={{ minHeight: "calc(100vh - 56px)" }}>
+      {/* Hero header */}
+      <div style={{ padding: "28px 40px 22px" }}>
+        <div className="flex items-end justify-between gap-6 flex-wrap">
+          <div className="flex flex-col gap-3" style={{ flex: 1, minWidth: 320 }}>
+            <div className="flex items-center gap-3">
+              <span className="eyebrow eyebrow-accent">Dashboard · the long view</span>
+              <span className="tag">
+                SplitLens<span className="muted-2">/</span>Dashboard
+                <span className="muted-2">/</span>all time
+              </span>
+            </div>
+            <h1 className="hero-display" style={{ fontSize: 56, margin: 0 }}>
+              Your money,{" "}
+              <span style={{ fontStyle: "italic", color: "var(--accent)" }}>
+                end to end
+              </span>
+              .
+            </h1>
+            <div className="body" style={{ maxWidth: 720 }}>
+              {summary.statementCount} statement
+              {summary.statementCount === 1 ? "" : "s"} ·{" "}
+              {summary.txnCount.toLocaleString("en-IN")} transactions ·{" "}
+              {summary.accountCount} account
+              {summary.accountCount === 1 ? "" : "s"}. Patterns, peers, and the
+              boring tail — laid out below.
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button type="button" className="btn btn-sm ghost" title="Refresh">
+              <Ico name="repeat" size={13} /> Refresh
+            </button>
+          </div>
         </div>
       </div>
 
+      {/* Stat strip */}
+      <div style={{ padding: "0 40px 16px" }}>
+        <KpiTiles summary={summary} heatmap={heatmap} daily={daily} />
+      </div>
+
+      {/* Time heatmap + insight callouts */}
+      <div
+        style={{
+          padding: "0 40px 16px",
+          display: "grid",
+          gridTemplateColumns: "minmax(0, 3fr) minmax(0, 2fr)",
+          gap: 20,
+        }}
+      >
+        <TimeHeatmap cells={heatmap} />
+        <InsightCallouts
+          summary={summary}
+          heatmap={heatmap}
+          daily={daily}
+          monthly={monthly}
+          topCounterparties={topCounterparties}
+        />
+      </div>
+
       {/* Monthly trajectory */}
-      <MonthlyTrajectory points={monthly} />
+      <div style={{ padding: "0 40px 16px" }}>
+        <MonthlyTrajectory points={monthly} />
+      </div>
 
       {/* Spending calendar */}
-      <SpendingCalendar daily={daily} />
+      <div style={{ padding: "0 40px 16px" }}>
+        <SpendingCalendar daily={daily} />
+      </div>
 
       {/* Top counterparties + autopay links */}
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <TopCounterparties rows={topCounterparties} />
-        </div>
+      <div
+        style={{
+          padding: "0 40px 16px",
+          display: "grid",
+          gridTemplateColumns: "minmax(0, 2fr) minmax(0, 1fr)",
+          gap: 20,
+        }}
+      >
+        <TopCounterparties rows={topCounterparties} />
         <AutopayLinks pairs={autopay} />
       </div>
 
       {/* Category treemap */}
-      <CategoryTreemap leaves={categoryTree} />
+      <div style={{ padding: "0 40px 16px" }}>
+        <CategoryTreemap leaves={categoryTree} />
+      </div>
 
       {/* Accounts + people */}
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+      <div
+        style={{
+          padding: "0 40px 16px",
+          display: "grid",
+          gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+          gap: 20,
+        }}
+      >
         <AccountsCard accounts={accounts} />
         <TopPeopleCard people={people} />
       </div>
 
       {/* Recent transactions */}
-      <RecentTxnsCard txns={recent} people={knownPeople} />
+      <div style={{ padding: "0 40px 32px" }}>
+        <RecentTxnsCard txns={recent} people={knownPeople} />
+      </div>
     </main>
   );
 }

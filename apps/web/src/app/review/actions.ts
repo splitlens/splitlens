@@ -9,13 +9,18 @@ import { revalidatePath } from "next/cache";
 
 import { openDb } from "@splitlens/db";
 import { DEFAULT_PEOPLE } from "@splitlens/core";
-import { ingestZeptoInvoice, writeForcedAttachment } from "@splitlens/ingest";
+import {
+  ingestZeptoInvoice,
+  isForcedAttachmentDuplicate,
+  writeForcedAttachment,
+} from "@splitlens/ingest";
 import {
   parseReceipt,
   recognizeText,
   VisionRuntimeError,
   VisionUnavailableError,
 } from "@splitlens/ocr";
+import { extractCounterpartyFromNarration } from "@/lib/narration";
 
 // ============================================================================
 // Field edits — counterparty / category / narration / notes / person
@@ -27,6 +32,30 @@ export interface TransactionEdits {
   narration?: string | null;
   notes?: string | null;
   personId?: string | null;
+  /**
+   * Names of friends this txn is split with (excluding "me"). Stored as a
+   * JSON-encoded text array in `shared_with`. Setting this also derives
+   * `share_count` (length + 1) unless `shareCount` is given explicitly.
+   * Pass `null` to clear (back to "just me").
+   */
+  sharedWith?: string[] | null;
+  /**
+   * Explicit override for share_count. Usually omitted — derived from
+   * sharedWith.length + 1. Useful when you want to say "3-way split" but
+   * haven't named the third person yet.
+   */
+  shareCount?: number;
+  /**
+   * How often this expense recurs. App-enforced enum: 'one_time' |
+   * 'monthly' | 'weekly' | 'quarterly' | 'yearly'. Pass `null` to clear.
+   */
+  recurrence?:
+    | "one_time"
+    | "monthly"
+    | "weekly"
+    | "quarterly"
+    | "yearly"
+    | null;
   /** When true, also set reviewed=1 (the "Save + mark reviewed" path). */
   markReviewed?: boolean;
 }
@@ -76,6 +105,29 @@ export async function updateTransaction(
   }
   if ("personId" in edits) {
     fragments.push(sql`person_id = ${edits.personId}`);
+  }
+  if ("sharedWith" in edits) {
+    // Clearing → NULL in shared_with, 1 in share_count (back to "just me").
+    // The on-disk shape is a comma-separated string (matches what the
+    // detail repo reads), not JSON.
+    if (edits.sharedWith == null || edits.sharedWith.length === 0) {
+      fragments.push(sql`shared_with = NULL`);
+      if (!("shareCount" in edits)) fragments.push(sql`share_count = 1`);
+    } else {
+      const cleaned = edits.sharedWith
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      fragments.push(sql`shared_with = ${cleaned.join(", ")}`);
+      if (!("shareCount" in edits)) {
+        fragments.push(sql`share_count = ${cleaned.length + 1}`);
+      }
+    }
+  }
+  if ("shareCount" in edits && typeof edits.shareCount === "number") {
+    fragments.push(sql`share_count = ${Math.max(1, Math.floor(edits.shareCount))}`);
+  }
+  if ("recurrence" in edits) {
+    fragments.push(sql`recurrence = ${edits.recurrence}`);
   }
   if (edits.markReviewed) {
     fragments.push(sql`reviewed = 1`);
@@ -180,6 +232,20 @@ export async function attachBillToTransaction(
   const ext = extname(cleanName).toLowerCase();
   const bankRoot =
     process.env.SPLITLENS_BANK_ROOT ?? join(homedir(), "Documents", "bank");
+
+  // Preflight dedup — runs BEFORE any disk write so re-dropping a file that
+  // is already attached to THIS txn doesn't overwrite-then-unlink the
+  // existing archive copy. Per-txn scoping means the same bytes can still
+  // attach to a different txn.
+  {
+    const db = openDb();
+    if (isForcedAttachmentDuplicate(db, txnId, bytes)) {
+      return {
+        ok: false,
+        error: "This file is already attached to this transaction.",
+      };
+    }
+  }
 
   // === Path 1: Zepto invoice PDF — synchronous parse + force-attach ===
   if (ext === ".pdf" && /^zepto_invoice_/i.test(cleanName)) {
@@ -337,15 +403,14 @@ async function attachImage(args: {
   });
 
   if (outcome.kind === "duplicate") {
-    // Best-effort cleanup — we wrote to archive but the DB says already attached
-    try {
-      unlinkSync(archivedPath);
-    } catch {
-      /* leave it */
-    }
+    // Reached only via a race (two concurrent attaches of the same file to
+    // the same txn passed preflight independently). The file at archivedPath
+    // is either the winner's copy (same path + same bytes) or the loser's;
+    // either way it must NOT be unlinked — that would destroy the winner's
+    // attachment. Leave the few KB on disk and surface the error.
     return {
       ok: false,
-      error: "This file was already attached to a transaction earlier.",
+      error: "This file is already attached to this transaction.",
     };
   }
   if (outcome.kind === "txn_not_found") {
@@ -416,14 +481,11 @@ async function attachManual(args: {
   });
 
   if (outcome.kind === "duplicate") {
-    try {
-      unlinkSync(archivedPath);
-    } catch {
-      /* leave it */
-    }
+    // Race-only path (see note in attachImage). Do NOT unlink — would
+    // destroy the winner's archive copy.
     return {
       ok: false,
-      error: "This file was already attached to a transaction earlier.",
+      error: "This file is already attached to this transaction.",
     };
   }
   if (outcome.kind === "txn_not_found") {
@@ -505,4 +567,479 @@ export async function unmarkReviewed(
   revalidatePath("/dashboard");
   revalidatePath("/reports", "layout");
   return { ok: true };
+}
+
+// ============================================================================
+// Custom categories — user-defined entries that extend the curated taxonomy.
+// ============================================================================
+
+const COLOR_PALETTE = new Set([
+  "rose",
+  "orange",
+  "amber",
+  "lime",
+  "emerald",
+  "teal",
+  "sky",
+  "indigo",
+  "violet",
+  "fuchsia",
+  "pink",
+  "blue",
+  "cyan",
+  "yellow",
+  "purple",
+  "red",
+  "green",
+]);
+
+export interface CreateCategoryInput {
+  /** Canonical id stored in transactions.category. */
+  id: string;
+  label: string;
+  emoji: string;
+  colorKey: string;
+  hint?: string | null;
+}
+
+export async function createCustomCategory(
+  input: CreateCategoryInput,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const id = input.id.trim();
+  const label = input.label.trim();
+  const emoji = input.emoji.trim();
+  const colorKey = input.colorKey.trim();
+  if (!id || !label || !emoji || !colorKey) {
+    return { ok: false, error: "id, label, emoji and color are required" };
+  }
+  if (!COLOR_PALETTE.has(colorKey)) {
+    return { ok: false, error: `unknown color: ${colorKey}` };
+  }
+  if (id.length > 64 || label.length > 64) {
+    return { ok: false, error: "id and label must be ≤ 64 chars" };
+  }
+  // emoji can be a multi-codepoint glyph; just cap the byte budget.
+  if (emoji.length > 16) {
+    return { ok: false, error: "emoji must be a single glyph" };
+  }
+
+  const db = openDb();
+  try {
+    db.run(sql`
+      INSERT INTO custom_categories (id, label, emoji, color_key, hint)
+      VALUES (${id}, ${label}, ${emoji}, ${colorKey}, ${input.hint ?? null})
+    `);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("UNIQUE")) {
+      return { ok: false, error: `category "${id}" already exists` };
+    }
+    return { ok: false, error: msg };
+  }
+  revalidatePath("/review");
+  revalidatePath("/dashboard");
+  return { ok: true };
+}
+
+export async function deleteCustomCategory(
+  id: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!id) return { ok: false, error: "id required" };
+  const db = openDb();
+  db.run(sql`DELETE FROM custom_categories WHERE id = ${id}`);
+  revalidatePath("/review");
+  return { ok: true };
+}
+
+// ============================================================================
+// Merchant labels — sticky "what is this charge really" annotations
+// ============================================================================
+
+export interface SaveMerchantLabelInput {
+  counterparty: string;
+  /**
+   * INR amount (rounded). NULL = label applies to ALL amounts for this
+   * counterparty (the fallback row). Per-amount labels take precedence over
+   * the fallback at read time.
+   */
+  amountInr: number | null;
+  /** User-friendly product name, e.g. "iCloud+ 200GB". */
+  label: string;
+  /** Optional category to surface in SmartSuggest when slot is empty. */
+  categoryHint?: string | null;
+}
+
+/**
+ * UPSERT a sticky merchant label. The (counterparty, amount_inr) pair is
+ * unique — re-saving updates the existing row.
+ *
+ * Local to this device; no sync.
+ */
+export async function saveMerchantLabel(
+  input: SaveMerchantLabelInput,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const cp = input.counterparty?.trim();
+  const label = input.label?.trim();
+  if (!cp) return { ok: false, error: "counterparty required" };
+  if (!label) return { ok: false, error: "label required" };
+  if (label.length > 120) {
+    return { ok: false, error: "label too long (max 120 chars)" };
+  }
+  const amount =
+    input.amountInr == null ? null : Math.max(0, Math.round(input.amountInr));
+  const categoryHint = input.categoryHint?.trim() || null;
+
+  const db = openDb();
+  // SQLite's ON CONFLICT requires a target — here it's the (counterparty,
+  // amount_inr) unique index. amount_inr=NULL is its own slot since SQLite
+  // treats NULL as distinct in unique indexes.
+  db.run(sql`
+    INSERT INTO merchant_labels (counterparty, amount_inr, label, category_hint, updated_at)
+    VALUES (${cp}, ${amount}, ${label}, ${categoryHint}, CURRENT_TIMESTAMP)
+    ON CONFLICT(counterparty, amount_inr) DO UPDATE SET
+      label = excluded.label,
+      category_hint = excluded.category_hint,
+      updated_at = CURRENT_TIMESTAMP
+  `);
+  revalidatePath("/review");
+  return { ok: true };
+}
+
+/**
+ * Remove a sticky label. Useful when the user mislabels and wants to start
+ * over (the UI doesn't expose this yet, but the action is here for the
+ * future "manage labels" surface).
+ */
+export async function deleteMerchantLabel(
+  counterparty: string,
+  amountInr: number | null,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const cp = counterparty?.trim();
+  if (!cp) return { ok: false, error: "counterparty required" };
+  const amount = amountInr == null ? null : Math.round(amountInr);
+  const db = openDb();
+  if (amount == null) {
+    db.run(sql`
+      DELETE FROM merchant_labels
+      WHERE counterparty = ${cp} AND amount_inr IS NULL
+    `);
+  } else {
+    db.run(sql`
+      DELETE FROM merchant_labels
+      WHERE counterparty = ${cp} AND amount_inr = ${amount}
+    `);
+  }
+  revalidatePath("/review");
+  return { ok: true };
+}
+
+// ============================================================================
+// Merchant deep-dive — every transaction with this counterparty, plus the
+// aggregates needed to render the takeover view from MerchantHistoryCard.
+// Fetched on demand (lazy) when the user clicks the merchant card; not part
+// of the bulk review payload.
+// ============================================================================
+
+export interface MerchantDetailTxn {
+  id: number;
+  /** ISO YYYY-MM-DD */
+  txnDate: string;
+  /** HH:MM, only present for CC parsers. */
+  txnTime: string | null;
+  /** Absolute INR (already abs in computeSuggestion convention). */
+  amountInr: number;
+  /** True for deposit/credit rows (refunds etc.); false for spend. */
+  isCredit: boolean;
+  category: string | null;
+  personId: string | null;
+  notes: string | null;
+  narration: string | null;
+  accountBank: string;
+  accountType: string;
+  accountLast4: string;
+  reviewed: boolean;
+}
+
+export interface MerchantMonthlyBucket {
+  /** "YYYY-MM" */
+  yearMonth: string;
+  totalInr: number;
+  count: number;
+}
+
+export interface MerchantDowBucket {
+  /** 0 = Sunday, 6 = Saturday. */
+  dow: number;
+  count: number;
+  totalInr: number;
+}
+
+export interface MerchantHourBucket {
+  /** 0-23 (local hour from txn_time HH:MM). */
+  hour: number;
+  count: number;
+  totalInr: number;
+}
+
+export interface MerchantDetail {
+  counterparty: string;
+  totalSpentInr: number;
+  count: number;
+  /** Mean charge (rounded INR). */
+  avgInr: number;
+  medianInr: number;
+  minInr: number;
+  maxInr: number;
+  /** ISO YYYY-MM-DD. */
+  firstSeen: string;
+  /** ISO YYYY-MM-DD. */
+  lastSeen: string;
+  /** Single largest charge (handy callout). */
+  biggestInr: number;
+  /** Date of the biggest single charge. */
+  biggestDate: string;
+  /** All same-counterparty rows, newest first, capped at 500. */
+  txns: MerchantDetailTxn[];
+  /** Bucketed monthly aggregates, oldest first, gaps filled with 0s. */
+  monthly: MerchantMonthlyBucket[];
+  /** Day-of-week aggregates (always present — every txn has a date). */
+  dow: MerchantDowBucket[];
+  /** Hour-of-day aggregates (CC only; empty when no time data). */
+  hour: MerchantHourBucket[];
+  /** True when txns array was truncated (caller can show a notice). */
+  truncated: boolean;
+}
+
+const MERCHANT_DETAIL_CAP = 500;
+
+export async function getMerchantDetail(
+  counterparty: string,
+): Promise<MerchantDetail | null> {
+  const cp = counterparty?.trim();
+  if (!cp) return null;
+
+  const db = openDb();
+  // Two-path scan, matching computeSuggestion in review-repo.ts:
+  //   a) Stored counterparty matches (case-insensitive)
+  //   b) Counterparty IS NULL but narration extraction yields the same
+  //      name — handles the common case where ingestion didn't capture a
+  //      counterparty but the rail's displayCounterparty fallback labels
+  //      every row with the same inferred name.
+  // Loose LIKE filter at SQL, then strict post-filter in JS using
+  // extractCounterpartyFromNarration. Over-fetch by 2× so the post-filter
+  // can drop noise without truncating real matches.
+  const candidates = db.all<{
+    id: number;
+    txn_date: string;
+    txn_time: string | null;
+    withdrawal: number | null;
+    deposit: number | null;
+    counterparty: string | null;
+    category: string | null;
+    person_id: string | null;
+    notes: string | null;
+    narration: string | null;
+    reviewed: number;
+    bank: string;
+    type: string;
+    last4: string;
+  }>(sql`
+    SELECT t.id, t.txn_date, t.txn_time, t.withdrawal, t.deposit,
+           t.counterparty,
+           t.category, t.person_id, t.notes, t.narration, t.reviewed,
+           a.bank, a.type, a.last4
+    FROM transactions t
+    JOIN accounts a ON a.id = t.account_id
+    WHERE t.counterparty = ${cp} COLLATE NOCASE
+       OR (
+         t.counterparty IS NULL
+         AND LOWER(t.narration) LIKE ${"%" + cp.toLowerCase() + "%"}
+       )
+    ORDER BY t.txn_date DESC, t.id DESC
+    LIMIT ${(MERCHANT_DETAIL_CAP + 1) * 2}
+  `);
+  const cpLower = cp.toLowerCase();
+  const rows = candidates.filter((r) => {
+    if (r.counterparty != null && r.counterparty.trim().length > 0) {
+      return true;
+    }
+    const extracted = extractCounterpartyFromNarration(r.narration);
+    return extracted != null && extracted.toLowerCase() === cpLower;
+  });
+
+  if (rows.length === 0) return null;
+
+  const truncated = rows.length > MERCHANT_DETAIL_CAP;
+  const sliced = truncated ? rows.slice(0, MERCHANT_DETAIL_CAP) : rows;
+
+  const txns: MerchantDetailTxn[] = sliced.map((r) => {
+    const isCredit = r.withdrawal == null && r.deposit != null;
+    const amountInr = Math.abs(r.withdrawal ?? r.deposit ?? 0);
+    return {
+      id: r.id,
+      txnDate: r.txn_date,
+      txnTime: r.txn_time,
+      amountInr,
+      isCredit,
+      category: r.category,
+      personId: r.person_id,
+      notes: r.notes,
+      narration: r.narration,
+      accountBank: r.bank,
+      accountType: r.type,
+      accountLast4: r.last4,
+      reviewed: Boolean(r.reviewed),
+    };
+  });
+
+  // ─── Aggregates ──────────────────────────────────────────────────────
+  // Run over the (uncapped-ish) sliced array. We treat credits as 0 spend
+  // for total/median/biggest — refunds shouldn't inflate "total spent at
+  // Blinkit". Count still includes them so the visit count matches the
+  // user's mental model.
+  const spendAmounts: number[] = [];
+  let total = 0;
+  let biggest = 0;
+  let biggestDate = txns[0]!.txnDate;
+  let minSpend = Number.POSITIVE_INFINITY;
+
+  const monthlyMap = new Map<string, { totalInr: number; count: number }>();
+  const dowMap = new Map<number, { count: number; totalInr: number }>();
+  const hourMap = new Map<number, { count: number; totalInr: number }>();
+
+  for (const t of txns) {
+    if (!t.isCredit) {
+      total += t.amountInr;
+      spendAmounts.push(t.amountInr);
+      if (t.amountInr > biggest) {
+        biggest = t.amountInr;
+        biggestDate = t.txnDate;
+      }
+      if (t.amountInr < minSpend) minSpend = t.amountInr;
+    }
+    const ym = t.txnDate.slice(0, 7);
+    const mb = monthlyMap.get(ym) ?? { totalInr: 0, count: 0 };
+    mb.totalInr += t.isCredit ? 0 : t.amountInr;
+    mb.count += 1;
+    monthlyMap.set(ym, mb);
+
+    const dow = dowOf(t.txnDate);
+    if (dow != null) {
+      const db = dowMap.get(dow) ?? { count: 0, totalInr: 0 };
+      db.count += 1;
+      db.totalInr += t.isCredit ? 0 : t.amountInr;
+      dowMap.set(dow, db);
+    }
+
+    if (t.txnTime) {
+      const h = parseHour(t.txnTime);
+      if (h != null) {
+        const hb = hourMap.get(h) ?? { count: 0, totalInr: 0 };
+        hb.count += 1;
+        hb.totalInr += t.isCredit ? 0 : t.amountInr;
+        hourMap.set(h, hb);
+      }
+    }
+  }
+
+  const count = txns.length;
+  const avg = spendAmounts.length === 0 ? 0 : Math.round(total / spendAmounts.length);
+  const median = medianOf(spendAmounts);
+  const min = minSpend === Number.POSITIVE_INFINITY ? 0 : minSpend;
+  const max = biggest;
+
+  // Build monthly array oldest→newest with zero-fill so the bar chart has
+  // a continuous x-axis even for months with no charges.
+  const firstYm = txns[txns.length - 1]!.txnDate.slice(0, 7);
+  const lastYm = txns[0]!.txnDate.slice(0, 7);
+  const monthly: MerchantMonthlyBucket[] = [];
+  for (const ym of monthRange(firstYm, lastYm)) {
+    const b = monthlyMap.get(ym) ?? { totalInr: 0, count: 0 };
+    monthly.push({ yearMonth: ym, totalInr: b.totalInr, count: b.count });
+  }
+
+  // DOW: always emit 0..6 so the chart x-axis is stable.
+  const dow: MerchantDowBucket[] = [];
+  for (let d = 0; d < 7; d++) {
+    const b = dowMap.get(d) ?? { count: 0, totalInr: 0 };
+    dow.push({ dow: d, count: b.count, totalInr: b.totalInr });
+  }
+
+  // Hour: only emit when there's any data. Empty array signals "no time
+  // info to plot" to the UI.
+  const hour: MerchantHourBucket[] = [];
+  if (hourMap.size > 0) {
+    for (let h = 0; h < 24; h++) {
+      const b = hourMap.get(h) ?? { count: 0, totalInr: 0 };
+      hour.push({ hour: h, count: b.count, totalInr: b.totalInr });
+    }
+  }
+
+  return {
+    counterparty: cp,
+    totalSpentInr: total,
+    count,
+    avgInr: avg,
+    medianInr: median,
+    minInr: min,
+    maxInr: max,
+    firstSeen: txns[txns.length - 1]!.txnDate,
+    lastSeen: txns[0]!.txnDate,
+    biggestInr: biggest,
+    biggestDate,
+    txns,
+    monthly,
+    dow,
+    hour,
+    truncated,
+  };
+}
+
+function medianOf(nums: number[]): number {
+  if (nums.length === 0) return 0;
+  const sorted = [...nums].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 0) {
+    return Math.round((sorted[mid - 1]! + sorted[mid]!) / 2);
+  }
+  return sorted[mid]!;
+}
+
+function dowOf(iso: string): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;
+  const ms = Date.UTC(
+    Number(iso.slice(0, 4)),
+    Number(iso.slice(5, 7)) - 1,
+    Number(iso.slice(8, 10)),
+  );
+  if (Number.isNaN(ms)) return null;
+  return new Date(ms).getUTCDay();
+}
+
+function parseHour(hhmm: string): number | null {
+  const m = /^(\d{1,2}):(\d{2})/.exec(hhmm);
+  if (!m) return null;
+  const h = Number(m[1]);
+  if (!Number.isFinite(h) || h < 0 || h > 23) return null;
+  return h;
+}
+
+function monthRange(startYm: string, endYm: string): string[] {
+  // Inclusive on both ends. Caller guarantees start ≤ end.
+  const [sy, sm] = startYm.split("-").map(Number) as [number, number];
+  const [ey, em] = endYm.split("-").map(Number) as [number, number];
+  const out: string[] = [];
+  let y = sy;
+  let m = sm;
+  while (y < ey || (y === ey && m <= em)) {
+    out.push(`${y}-${String(m).padStart(2, "0")}`);
+    m += 1;
+    if (m > 12) {
+      m = 1;
+      y += 1;
+    }
+    // Hard safety: 50 years' worth of months. Anything larger is a bug.
+    if (out.length > 600) break;
+  }
+  return out;
 }

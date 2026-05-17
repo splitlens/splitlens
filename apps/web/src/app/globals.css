@@ -1,54 +1,152 @@
 @import "tailwindcss";
 
-/* Light theme is the default; dark variants kick in when the OS prefers dark.
- * Both themes share the same accent/success/danger; only the background +
- * neutral surfaces shift. Tailwind 4's `dark:` utilities also use the same
- * prefers-color-scheme media query, so we stay consistent across CSS vars
- * and Tailwind classes. */
+/* `dark:` variant fires when a dark-tone palette is active. Three of the
+ * four palettes are dark (almanac, terminal, plum); only `press` is light.
+ * This lets taxonomy.ts's per-category chip classes (which already use the
+ * conventional `light · dark:` Tailwind pair) auto-switch correctly with
+ * the palette switcher, instead of being tied to the OS color-scheme. */
+@custom-variant dark (&:where([data-palette="almanac"] *, [data-palette="almanac"], [data-palette="terminal"] *, [data-palette="terminal"], [data-palette="plum"] *, [data-palette="plum"]));
 
-:root {
-  --bg: #fafafa;        /* zinc-50 */
-  --fg: #18181b;        /* zinc-900 */
-  --muted: #71717a;     /* zinc-500 */
-  --card: #ffffff;
-  --border: #e4e4e7;    /* zinc-200 */
-  --accent: #4f46e5;    /* indigo-600 */
-  --success: #059669;
-  --danger: #dc2626;
+/* ──────────────────────────────────────────────────────────────
+   SplitLens · Hi-fi design tokens
+   Confident-and-financial: deep near-black, warm amber accent,
+   Hanken Grotesk for everything (Söhne-adjacent, grounded numerals),
+   Geist Mono for refs / UTRs / kbd.
+   Four palettes selectable via [data-palette] on <html>:
+     almanac  (default) — warm dark
+     terminal           — cool engineering
+     plum               — jewel accent
+     press              — light editorial
+   ────────────────────────────────────────────────────────────── */
+
+:root,
+[data-palette="almanac"] {
+  --page-bg: #050402;
+  --bg: #0c0a08;
+  --surface: #16120e;
+  --surface-2: #1f1a15;
+  --surface-3: #2a241c;
+  --border: #2c261f;
+  --border-strong: #423a30;
+  --border-dashed: #2e2820;
+  --fg: #ededeb;
+  --fg-2: #cac6c0;
+  --muted: #918a80;
+  --muted-2: #5e574e;
+  --muted-3: #3a352f;
+  --accent: #f0b14a;
+  --accent-ink: #1a1208;
+  --accent-soft: rgba(240, 177, 74, 0.13);
+  --accent-line: rgba(240, 177, 74, 0.35);
+  --debit: #ec6c52;
+  --credit: #67be84;
+  --warn: #e8946a;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #09090b;      /* zinc-950 */
-    --fg: #fafafa;      /* zinc-50 */
-    --muted: #a1a1aa;   /* zinc-400 */
-    --card: #18181b;    /* zinc-900 */
-    --border: #27272a;  /* zinc-800 */
-    --accent: #818cf8;  /* indigo-400 */
-    --success: #34d399;
-    --danger: #f87171;
-  }
+[data-palette="terminal"] {
+  --page-bg: #06080a;
+  --bg: #0a0d10;
+  --surface: #14181c;
+  --surface-2: #1c2126;
+  --surface-3: #262c33;
+  --border: #2a3038;
+  --border-strong: #3d4550;
+  --border-dashed: #2d343c;
+  --fg: #e8ebf0;
+  --fg-2: #c4cad3;
+  --muted: #8590a0;
+  --muted-2: #525c6b;
+  --muted-3: #363d47;
+  --accent: #7dd3c0;
+  --accent-ink: #062019;
+  --accent-soft: rgba(125, 211, 192, 0.13);
+  --accent-line: rgba(125, 211, 192, 0.35);
+  --debit: #f87474;
+  --credit: #7dd3c0;
+  --warn: #f0b54a;
+}
+
+[data-palette="plum"] {
+  --page-bg: #07050c;
+  --bg: #0d0a13;
+  --surface: #18131f;
+  --surface-2: #221a2b;
+  --surface-3: #2d2238;
+  --border: #2e2638;
+  --border-strong: #453a56;
+  --border-dashed: #2e283a;
+  --fg: #ecebf2;
+  --fg-2: #c8c4d4;
+  --muted: #928aa0;
+  --muted-2: #5d556e;
+  --muted-3: #3a3346;
+  --accent: #b48cf2;
+  --accent-ink: #150b25;
+  --accent-soft: rgba(180, 140, 242, 0.13);
+  --accent-line: rgba(180, 140, 242, 0.35);
+  --debit: #ef6f5c;
+  --credit: #6bbf86;
+  --warn: #f3b13f;
+}
+
+[data-palette="press"] {
+  --page-bg: #e7dfca;
+  --bg: #f4eedf;
+  --surface: #fbf7eb;
+  --surface-2: #ece4cf;
+  --surface-3: #ddd2b8;
+  --border: #d8cdb3;
+  --border-strong: #b8a988;
+  --border-dashed: #c8bea2;
+  --fg: #1a1714;
+  --fg-2: #4a423a;
+  --muted: #7a6f60;
+  --muted-2: #9a8f80;
+  --muted-3: #bcb19c;
+  --accent: #b8732d;
+  --accent-ink: #f7f1e0;
+  --accent-soft: rgba(184, 115, 45, 0.13);
+  --accent-line: rgba(184, 115, 45, 0.35);
+  --debit: #bb422a;
+  --credit: #3a7d4f;
+  --warn: #a85d1c;
 }
 
 @theme {
   --color-bg: var(--bg);
   --color-fg: var(--fg);
+  --color-fg-2: var(--fg-2);
   --color-muted: var(--muted);
-  --color-card: var(--card);
+  --color-muted-2: var(--muted-2);
+  --color-muted-3: var(--muted-3);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
   --color-accent: var(--accent);
-  --color-accent-fg: #ffffff;
-  --color-success: var(--success);
-  --color-danger: var(--danger);
+  --color-accent-ink: var(--accent-ink);
+  --color-debit: var(--debit);
+  --color-credit: var(--credit);
+  --color-warn: var(--warn);
 
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  /* next/font sets --font-sans / --font-mono / --font-serif on <html>;
+     these aliases let `font-mono` / `font-sans` Tailwind utilities resolve. */
 }
 
-html, body {
-  background: var(--bg);
+html,
+body {
+  margin: 0;
+  background: var(--page-bg);
   color: var(--fg);
-  font-family: var(--font-sans);
+  font-family:
+    var(--font-sans, "Hanken Grotesk"),
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -57,20 +155,332 @@ html, body {
   box-sizing: border-box;
 }
 
-/* SVG cell palette for heatmap + calendar. Two colors that auto-flip with
- * the OS theme — the rest of the gradient (indigo / blue mid-tones) reads
- * fine on both backgrounds without adjustment. */
-:root {
-  --cell-empty: #f4f4f5;       /* zinc-100 in light */
-  --cell-empty-stroke: rgba(0,0,0,0.03);
-  --cell-low: #eef2ff;          /* indigo-50 in light */
-  --svg-label: #71717a;         /* zinc-500 */
+::selection {
+  background: var(--accent);
+  color: var(--accent-ink);
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --cell-empty: #1f1f24;     /* slightly lighter than card */
-    --cell-empty-stroke: rgba(255,255,255,0.04);
-    --cell-low: #1e1b4b;        /* indigo-950 */
-    --svg-label: #a1a1aa;       /* zinc-400 */
-  }
+
+/* ── Typography helpers ─────────────────────────────────────── */
+
+/* `.serif` is a legacy class name — kept so call-sites don't churn.
+ * Now renders as Hanken Grotesk semibold with tight tracking, giving
+ * headlines confident weight instead of editorial softness. */
+.serif {
+  font-family: var(--font-sans, "Hanken Grotesk"), ui-sans-serif, system-ui,
+    sans-serif;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.mono {
+  font-family: var(--font-mono, "Geist Mono"), ui-monospace, "JetBrains Mono",
+    monospace;
+  font-feature-settings: "tnum";
+}
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.eyebrow {
+  font-family: var(--font-mono, "Geist Mono"), ui-monospace, monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 500;
+}
+.eyebrow-accent {
+  color: var(--accent);
+}
+
+.hero-display {
+  font-family: var(--font-sans, "Hanken Grotesk"), ui-sans-serif, system-ui,
+    sans-serif;
+  font-size: 56px;
+  line-height: 1;
+  letter-spacing: -0.035em;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.display {
+  font-family: var(--font-sans, "Hanken Grotesk"), ui-sans-serif, system-ui,
+    sans-serif;
+  font-size: 36px;
+  line-height: 1.05;
+  letter-spacing: -0.025em;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.h1 {
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  margin: 0;
+}
+.h2 {
+  font-size: 17px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  line-height: 1.25;
+  margin: 0;
+}
+.body {
+  font-size: 14px;
+  color: var(--fg-2);
+  line-height: 1.55;
+}
+.small {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.tiny {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+.muted { color: var(--muted); }
+.muted-2 { color: var(--muted-2); }
+.fg-2 { color: var(--fg-2); }
+.debit { color: var(--debit); }
+.credit { color: var(--credit); }
+.warn { color: var(--warn); }
+.accent { color: var(--accent); }
+
+/* Numerals — Hanken Grotesk semibold with tabular figures. Hanken's
+ * digits are wider and more grounded than Geist's (closer to Söhne),
+ * which is what gives amounts a confident, financial feel without
+ * forcing a separate display font for numbers. */
+.num-amount {
+  font-family: var(--font-sans, "Hanken Grotesk"), ui-sans-serif, system-ui,
+    sans-serif;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* ── Surfaces ───────────────────────────────────────────────── */
+
+.surface {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.surface-2 {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.surface-flat {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.surface-dashed {
+  background: transparent;
+  border: 1px dashed var(--border-strong);
+  border-radius: 12px;
+}
+
+/* ── Chips ──────────────────────────────────────────────────── */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12.5px;
+  background: transparent;
+  color: var(--fg-2);
+  white-space: nowrap;
+  cursor: pointer;
+  line-height: 1.2;
+  font-family: inherit;
+}
+.chip:hover {
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
+.chip.active {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
+.chip.accent {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+.chip.ghost {
+  color: var(--muted);
+  border-style: dashed;
+}
+.chip-sm {
+  padding: 2px 8px;
+  font-size: 11.5px;
+}
+.chip-lg {
+  padding: 5px 12px;
+  font-size: 13px;
+}
+
+/* ── Keyboard hint ──────────────────────────────────────────── */
+
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  font-family: var(--font-mono, "Geist Mono"), ui-monospace, monospace;
+  font-size: 10.5px;
+  color: var(--muted);
+  background: var(--surface);
+}
+.kbd-on-accent {
+  background: rgba(0, 0, 0, 0.16) !important;
+  color: var(--accent-ink) !important;
+  border-color: rgba(0, 0, 0, 0.28) !important;
+}
+
+/* ── Buttons ────────────────────────────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  line-height: 1;
+}
+.btn:hover {
+  border-color: var(--border-strong);
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.btn.primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+  font-weight: 500;
+}
+.btn.primary:hover {
+  filter: brightness(1.08);
+}
+.btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+.btn.ghost:hover {
+  color: var(--fg);
+}
+.btn.outline {
+  background: transparent;
+}
+.btn-sm {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+.btn-lg {
+  padding: 9px 18px;
+  font-size: 14px;
+}
+
+/* ── Inline SVG icon ────────────────────────────────────────── */
+
+.ico {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ico-sm { width: 13px; height: 13px; }
+.ico-lg { width: 20px; height: 20px; }
+
+/* ── Dot, divider, tag, progress, sparkbar ──────────────────── */
+
+.dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--muted-2);
+}
+.dot.accent { background: var(--accent); }
+.dot.credit { background: var(--credit); }
+.dot.debit { background: var(--debit); }
+.dot.warn { background: var(--warn); }
+.dot.lg { width: 8px; height: 8px; }
+
+.hr { border: 0; border-top: 1px solid var(--border); margin: 0; }
+.hr-dashed { border: 0; border-top: 1px dashed var(--border-dashed); margin: 0; }
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono, "Geist Mono"), ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+.progress {
+  height: 4px;
+  background: var(--surface-2);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+.progress > i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.sparkbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 1.5px;
+}
+.sparkbar > span {
+  width: 4px;
+  background: var(--muted-2);
+  border-radius: 1px;
+}
+.sparkbar > span.hl { background: var(--accent); }
+
+/* Focus rail — left amber stripe on the focused row */
+.row-focus {
+  position: relative;
+}
+.row-focus::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 3px;
+  height: 22px;
+  margin-top: -11px;
+  background: var(--accent);
+  border-radius: 2px;
 }

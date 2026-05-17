@@ -103,7 +103,7 @@ export async function extractPagesPositional(
       ];
       for (const k of headerKeys) {
         const found = p1.words.find((w) => w.text === k);
-        console.log(`[SplitLens] Header word '${k}':`, found ?? "❌ NOT FOUND");
+        console.log(`[SplitLens] Header word '${k}':`, found ?? "(missing)");
       }
     }
   }

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getFriendDetail } from "@/lib/repo";
 import { fmtInr, fmtDate } from "@/lib/format";
+import { Ico } from "@/components/Ico";
 import { FriendBalanceChip } from "@/components/friends/FriendBalanceChip";
 import { FriendDetailTimeline } from "@/components/friends/FriendDetailTimeline";
 import { listKnownPeople } from "../actions";
@@ -22,100 +23,160 @@ export default async function FriendDetailPage({ params }: PageProps) {
   if (!detail) notFound();
 
   const { person, directTxns, sharedTxns } = detail;
+  const totalTxns = person.directTxnCount + person.sharedTxnCount;
+  const first = person.displayName.split(" ")[0] ?? person.displayName;
+  const isSettled = Math.abs(person.net) < 10;
 
   return (
-    <main className="mx-auto max-w-5xl space-y-5 px-4 py-6 sm:px-6 lg:px-8">
-      <header>
+    <main className="flex flex-col" style={{ minHeight: "calc(100vh - 56px)" }}>
+      {/* Hero */}
+      <div style={{ padding: "24px 40px 18px" }}>
         <Link
           href="/friends"
-          className="text-xs text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-50"
+          className="btn btn-sm ghost"
+          style={{ marginBottom: 14 }}
         >
-          ← Back to Friends
+          <Ico name="arrow-left" size={13} /> Back to Friends
         </Link>
-        <div className="mt-2 flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-              {person.displayName}
-            </h1>
-            <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-              {person.relationship} ·{" "}
-              {person.directTxnCount + person.sharedTxnCount} transaction
-              {person.directTxnCount + person.sharedTxnCount === 1 ? "" : "s"} on record
-              {person.lastTxnDate ? ` · last on ${fmtDate(person.lastTxnDate)}` : ""}
-            </p>
-          </div>
-          <FriendBalanceChip net={person.net} displayName={person.displayName} size="lg" />
-        </div>
-      </header>
 
-      {/* Balance breakdown */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <BreakdownTile
+        <div className="flex items-end justify-between gap-6 flex-wrap">
+          <div className="flex flex-col gap-3" style={{ flex: 1, minWidth: 320 }}>
+            <div className="flex items-center gap-3">
+              <span className="eyebrow eyebrow-accent">Friend · the ledger</span>
+              <span className="tag">
+                Friends<span className="muted-2">/</span>
+                {person.displayName}
+                <span className="muted-2">/</span>
+                {totalTxns} txn{totalTxns === 1 ? "" : "s"}
+              </span>
+            </div>
+            <h1 className="hero-display" style={{ fontSize: 56, margin: 0 }}>
+              {person.displayName}
+              {isSettled ? (
+                <span className="muted">. Settled up.</span>
+              ) : person.net > 0 ? (
+                <>
+                  <span className="muted"> owes you </span>
+                  <span style={{ fontStyle: "italic", color: "var(--credit)" }}>
+                    {fmtInr(Math.abs(person.net))}
+                  </span>
+                  .
+                </>
+              ) : (
+                <>
+                  <span className="muted">: you owe </span>
+                  <span style={{ fontStyle: "italic", color: "var(--debit)" }}>
+                    {fmtInr(Math.abs(person.net))}
+                  </span>
+                  .
+                </>
+              )}
+            </h1>
+            <div className="body" style={{ maxWidth: 720 }}>
+              <span className="fg-2">{person.relationship}</span> ·{" "}
+              {totalTxns} transaction{totalTxns === 1 ? "" : "s"} on record
+              {person.lastTxnDate ? (
+                <>
+                  {" · last on "}
+                  <span className="fg-2">{fmtDate(person.lastTxnDate)}</span>
+                </>
+              ) : null}
+              .
+            </div>
+          </div>
+
+          <div className="flex flex-col items-end gap-2" style={{ minWidth: 240 }}>
+            <FriendBalanceChip
+              net={person.net}
+              displayName={person.displayName}
+              size="lg"
+            />
+            <span className="tiny muted">
+              <Ico name="users" size={13} /> {person.directTxnCount} direct ·{" "}
+              {person.sharedTxnCount} shared
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Stats strip */}
+      <div
+        style={{
+          margin: "0 40px",
+          padding: "14px 22px",
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          borderRadius: 12,
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr 1fr 1fr",
+          alignItems: "center",
+          gap: 24,
+        }}
+      >
+        <StatCol
           label="You paid direct"
           value={fmtInr(person.directOut)}
-          hint="UPI / transfers from you"
+          sub="UPI / transfers from you"
+          cls="debit"
         />
-        <BreakdownTile
+        <StatCol
           label="They paid you"
           value={fmtInr(person.directIn)}
-          hint="UPI / transfers from them"
+          sub="UPI / transfers from them"
+          cls="credit"
         />
-        <BreakdownTile
+        <StatCol
           label="Their share of yours"
           value={fmtInr(person.sharedOwed)}
-          hint={`${person.sharedTxnCount} shared expense${person.sharedTxnCount === 1 ? "" : "s"}`}
+          sub={`${person.sharedTxnCount} shared expense${person.sharedTxnCount === 1 ? "" : "s"}`}
         />
-        <BreakdownTile
+        <StatCol
           label="Net"
           value={fmtInr(Math.abs(person.net))}
-          tone={person.net > 10 ? "positive" : person.net < -10 ? "negative" : "neutral"}
-          hint={
-            Math.abs(person.net) < 10
+          sub={
+            isSettled
               ? "Settled"
               : person.net > 0
-                ? `${person.displayName.split(" ")[0]} owes you`
-                : `You owe ${person.displayName.split(" ")[0]}`
+              ? `${first} owes you`
+              : `You owe ${first}`
           }
+          cls={isSettled ? "" : person.net > 0 ? "credit" : "debit"}
         />
       </div>
 
       {/* Activity timeline (interactive) */}
-      <FriendDetailTimeline
-        person={person}
-        directTxns={directTxns}
-        sharedTxns={sharedTxns}
-        people={people}
-      />
+      <div style={{ padding: "20px 40px 40px" }}>
+        <FriendDetailTimeline
+          person={person}
+          directTxns={directTxns}
+          sharedTxns={sharedTxns}
+          people={people}
+        />
+      </div>
     </main>
   );
 }
 
-function BreakdownTile({
+function StatCol({
   label,
   value,
-  hint,
-  tone = "neutral",
+  sub,
+  cls = "",
 }: {
   label: string;
   value: string;
-  hint?: string;
-  tone?: "positive" | "negative" | "neutral";
+  sub: string;
+  cls?: string;
 }) {
-  const toneCls =
-    tone === "positive"
-      ? "text-emerald-700 dark:text-emerald-400"
-      : tone === "negative"
-        ? "text-rose-700 dark:text-rose-400"
-        : "text-zinc-900 dark:text-zinc-50";
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white px-4 py-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-      <div className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-        {label}
+    <div className="flex flex-col gap-1">
+      <span className="eyebrow">{label}</span>
+      <div className="flex items-baseline gap-2">
+        <span className={`num-amount ${cls}`} style={{ fontSize: 26 }}>
+          {value}
+        </span>
       </div>
-      <div className={`mt-1 text-xl font-semibold tabular-nums ${toneCls}`}>{value}</div>
-      {hint && (
-        <div className="mt-0.5 text-[11px] text-zinc-500 dark:text-zinc-500">{hint}</div>
-      )}
+      <span className="tiny">{sub}</span>
     </div>
   );
 }

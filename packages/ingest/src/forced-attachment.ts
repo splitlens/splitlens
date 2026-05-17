@@ -40,7 +40,12 @@ export interface WriteForcedAttachmentArgs {
   sourceType: string;
   /** Absolute path of the archived file. */
   sourceFile: string;
-  /** Stable hash of the file bytes; enforces idempotency via uq_statement_source_hash. */
+  /**
+   * Stable hash of the file bytes; enforces idempotency via uq_statement_source_hash.
+   * When provided, callers are responsible for scoping it per-txn (see
+   * `scopedForcedAttachmentHash`). When omitted, this function derives the
+   * per-txn-scoped hash from `fileBytes` itself.
+   */
   sourceHash?: string;
   /** Raw bytes — used to compute sourceHash when none is provided. */
   fileBytes?: Uint8Array | Buffer;
@@ -48,6 +53,57 @@ export interface WriteForcedAttachmentArgs {
   rawJson: Record<string, unknown>;
   /** Optional identifier the source has (order id, msg id, …). Stored on the row. */
   sourceTxnId?: string | null;
+}
+
+/**
+ * Per-txn-scoped attachment hash. Globally-unique on `statements.source_hash`
+ * but lets the same file bytes attach to different txns — e.g. one Swiggy
+ * receipt that pairs with both the original charge and a separate refund row.
+ *
+ * Re-dropping the same file on the same txn still collides → caught as a
+ * duplicate (intended no-op).
+ */
+export function scopedForcedAttachmentHash(
+  fileBytes: Uint8Array | Buffer,
+  transactionId: number,
+): string {
+  const raw = createHash("sha256").update(fileBytes).digest("hex");
+  return `${raw}:txn:${transactionId}`;
+}
+
+/**
+ * Preflight dedup check. Use BEFORE archiving the file to disk so we don't
+ * overwrite-then-unlink an earlier successful attachment when the user
+ * re-drops the same file on the same txn. Returns true iff there is already
+ * a (file, txn) attachment with these bytes.
+ *
+ * Also catches pre-scoping legacy rows (un-salted hash) that already point
+ * to this same txn — so the bug-fix is safe for databases that pre-date this
+ * change. Cross-txn legacy hashes are intentionally NOT matched: the whole
+ * point of scoping is to allow cross-txn attaches.
+ */
+export function isForcedAttachmentDuplicate(
+  db: SplitLensDb,
+  transactionId: number,
+  fileBytes: Uint8Array | Buffer,
+): boolean {
+  const rawHash = createHash("sha256").update(fileBytes).digest("hex");
+  const scopedHash = `${rawHash}:txn:${transactionId}`;
+  const scopedHit = db.get<{ id: number }>(sql`
+    SELECT id FROM statements WHERE source_hash = ${scopedHash}
+  `);
+  if (scopedHit) return true;
+  // Legacy un-salted row for this same txn? (Only same-txn matters — cross-txn
+  // raw-hash matches are the bug we're fixing.)
+  const legacyHit = db.get<{ id: number }>(sql`
+    SELECT s.id
+    FROM statements s
+    JOIN transaction_sources ts ON ts.statement_id = s.id
+    WHERE s.source_hash = ${rawHash}
+      AND ts.transaction_id = ${transactionId}
+    LIMIT 1
+  `);
+  return legacyHit != null;
 }
 
 /**
@@ -62,7 +118,7 @@ export function writeForcedAttachment(
   const sourceHash =
     args.sourceHash ??
     (args.fileBytes
-      ? createHash("sha256").update(args.fileBytes).digest("hex")
+      ? scopedForcedAttachmentHash(args.fileBytes, transactionId)
       : null);
   if (!sourceHash) {
     return {
@@ -71,8 +127,10 @@ export function writeForcedAttachment(
     };
   }
 
-  // Re-attach guard: if a statement with this exact hash already exists,
-  // treat as duplicate. Same file dropped twice ≠ two source rows.
+  // Re-attach guard: same (file, txn) collides on the per-txn-scoped hash.
+  // Callers should preflight with `isForcedAttachmentDuplicate` before
+  // archiving the file to disk; this internal check is defence-in-depth for
+  // concurrent writers.
   const existing = db
     .select({ id: statements.id })
     .from(statements)

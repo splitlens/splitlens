@@ -5,6 +5,7 @@ import {
   lookupEmailsForTxn,
   type EmailMatchLite,
 } from "@/app/friends/email-lookup-actions";
+import { Ico } from "@/components/Ico";
 import { EmailMatchModal } from "./EmailMatchModal";
 
 /**
@@ -57,25 +58,11 @@ export function FindEmailsButton({
       <button
         type="button"
         onClick={openModal}
-        className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
+        className="btn btn-sm ghost"
         title="Find emails related to this charge"
         aria-label="Find emails about this transaction"
       >
-        <svg
-          width="10"
-          height="10"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden
-        >
-          <rect x="3" y="5" width="18" height="14" rx="2" />
-          <path d="m3 7 9 6 9-6" />
-        </svg>
-        Email
+        <Ico name="paperclip" size={13} /> Email
       </button>
       {open && (
         <EmailMatchModal

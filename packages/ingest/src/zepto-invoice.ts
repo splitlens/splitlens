@@ -64,12 +64,16 @@ export async function ingestZeptoInvoice(
   opts: IngestZeptoInvoiceOptions & { forceTransactionId?: number } = {},
 ): Promise<ZeptoInvoiceOutcome> {
   const bytes = new Uint8Array(await readFile(filePath));
-  const sourceHash = createHash("sha256").update(bytes).digest("hex");
+  const rawHash = createHash("sha256").update(bytes).digest("hex");
+  // Force-attach (the /review "attach a bill" dropzone) scopes the dedup
+  // per-txn so the same invoice can be linked to multiple txns; the daemon
+  // auto-match path keeps the global hash so we don't re-ingest the same
+  // PDF and second-guess the original match outcome.
+  const sourceHash =
+    opts.forceTransactionId != null
+      ? `${rawHash}:txn:${opts.forceTransactionId}`
+      : rawHash;
 
-  // Re-ingest guard. statements.uq_statement_source_hash is unique; if we've
-  // seen this PDF before we short-circuit so we don't second-guess the
-  // original match outcome (the original linker may have been right or
-  // wrong, but re-running won't help).
   const existing = db
     .select({ id: statements.id })
     .from(statements)

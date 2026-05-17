@@ -120,6 +120,13 @@ export const transactions = sqliteTable(
     /** 1 = user has reviewed/edited this row; ingestion merger must not overwrite user-edited fields. */
     reviewed: integer("reviewed", { mode: "boolean" }).notNull().default(false),
     /**
+     * How often this kind of expense repeats. NULL = not yet classified.
+     * Enum values (app-enforced): 'one_time' | 'monthly' | 'weekly' |
+     * 'quarterly' | 'yearly'. Used by the review drawer's recurrence
+     * picker + future filters / charts.
+     */
+    recurrence: text("recurrence"),
+    /**
      * Self-FK linking two canonical transactions that represent two ledger
      * entries of one cross-account money movement (canonical case: a HDFC CC
      * AUTOPAY debit on the savings account ↔ the matching AUTOPAY PAYMENT
@@ -138,6 +145,8 @@ export const transactions = sqliteTable(
     idxCategory: index("idx_txn_category").on(t.category),
     idxRefNo: index("idx_txn_ref_no").on(t.refNo),
     idxPerson: index("idx_txn_person").on(t.personId),
+    /** Powers SmartSuggest's merchant history aggregation. */
+    idxCounterparty: index("idx_txn_counterparty").on(t.counterparty),
   }),
 );
 
@@ -184,6 +193,128 @@ export const people = sqliteTable("people", {
   createdAt: isoTimestamp("created_at"),
 });
 
+/**
+ * User-supplied "what is this charge really" annotation. Resolves opaque
+ * merchant strings (canonical case: "APPLE MEDIA SERVICES") to a specific
+ * product the user recognizes ("iCloud+ 200GB").
+ *
+ * Keyed on (counterparty, amount_inr). Same merchant at a different price is
+ * a different product — ₹59 vs ₹99 vs ₹159 Apple charges are not the same
+ * subscription. A NULL `amount_inr` row is a fallback that applies to any
+ * amount for that counterparty.
+ *
+ * Local to this device — no sync. Wiping browser data wipes labels. The
+ * SmartSuggest pipeline merges these in at read-time; nothing in the
+ * ingestion pipeline writes here.
+ */
+export const merchantLabels = sqliteTable(
+  "merchant_labels",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** Exact match against `transactions.counterparty`. */
+    counterparty: text("counterparty").notNull(),
+    /** Amount in INR (rounded to nearest rupee). NULL = applies to any amount. */
+    amountInr: integer("amount_inr"),
+    /** User-friendly product name, e.g. "iCloud+ 200GB". */
+    label: text("label").notNull(),
+    /**
+     * Optional category suggestion (e.g. "Subscriptions") — the SmartSuggest
+     * will fill the category slot with this when no category is set yet. The
+     * user still has to accept.
+     */
+    categoryHint: text("category_hint"),
+    /**
+     * Override for the "is this an online merchant" heuristic that decides
+     * whether to attempt location inference. NULL = fall back to the
+     * built-in merchant-hints KB (Apple/Google/Netflix etc. count as online).
+     * 1 = always online (never infer location). 0 = always physical
+     * (always try to infer). Set by the user from the location chip UI for
+     * the long tail of merchants the KB doesn't know.
+     */
+    isOnline: integer("is_online", { mode: "boolean" }),
+    createdAt: isoTimestamp("created_at"),
+    updatedAt: isoTimestamp("updated_at"),
+  },
+  (t) => ({
+    /**
+     * UPSERT key. SQLite treats NULL as distinct in unique indexes, so the
+     * NULL-amount fallback row coexists peacefully with per-amount rows.
+     */
+    unqKey: uniqueIndex("uq_merchant_label_key").on(t.counterparty, t.amountInr),
+  }),
+);
+
+/**
+ * Google Maps Timeline ingestion provenance. One row per Takeout export
+ * the user has imported. Hash of the source bytes is the idempotency key —
+ * re-uploading the same export returns the existing row.
+ */
+export const locationImports = sqliteTable(
+  "location_imports",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /** SHA-256 hex of the source bytes (zip or json). */
+    takeoutHash: text("takeout_hash").notNull(),
+    /** Earliest UTC timestamp covered by this import. ISO 8601. */
+    periodFrom: text("period_from"),
+    /** Latest UTC timestamp covered by this import. ISO 8601. */
+    periodTo: text("period_to"),
+    /** Number of downsampled raw GPS rows written. */
+    recordCount: integer("record_count").notNull(),
+    /** Number of semantic placeVisit rows written. */
+    semanticCount: integer("semantic_count").notNull(),
+    importedAt: isoTimestamp("imported_at"),
+  },
+  (t) => ({
+    unqHash: uniqueIndex("uq_loc_import_hash").on(t.takeoutHash),
+  }),
+);
+
+/**
+ * One row per downsampled GPS ping or per semantic placeVisit stay.
+ * `window_end_utc` is non-null only for semantic stays (the duration the
+ * user was at that place). For raw pings, treat `timestamp_utc` as the
+ * only time signal.
+ *
+ * The SmartSuggest "where were you when this charge happened" inference
+ * reads from this table, never writes — wiping a row never has cascading
+ * effects on transactions.
+ */
+export const locationRecords = sqliteTable(
+  "location_records",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    /**
+     * ISO 8601 UTC. For semantic stays this is the start of the stay; for
+     * raw pings it's the moment the ping was recorded.
+     */
+    timestampUtc: text("timestamp_utc").notNull(),
+    /** ISO 8601 UTC. Non-null for semantic stays only. */
+    windowEndUtc: text("window_end_utc"),
+    lat: real("lat").notNull(),
+    lng: real("lng").notNull(),
+    /** Meters. Null for semantic stays and pings without an accuracy reading. */
+    accuracyM: integer("accuracy_m"),
+    /** Google's friendly name when known. NULL for raw pings. */
+    placeName: text("place_name"),
+    /** Stable Google Place ID. NULL for raw pings. */
+    placeId: text("place_id"),
+    /** Google's taxonomy bucket ("RESTAURANT", "TYPE_GYM", ...). NULL for raw pings. */
+    placeCategory: text("place_category"),
+    /** 'takeout_raw' | 'takeout_semantic'. */
+    sourceKind: text("source_kind").notNull(),
+    importId: integer("import_id")
+      .references(() => locationImports.id, { onDelete: "cascade" })
+      .notNull(),
+    importedAt: isoTimestamp("imported_at"),
+  },
+  (t) => ({
+    idxTs: index("idx_loc_ts").on(t.timestampUtc),
+    /** Covers semantic-stay "contains this timestamp" queries efficiently. */
+    idxWindow: index("idx_loc_window").on(t.timestampUtc, t.windowEndUtc),
+  }),
+);
+
 export const rules = sqliteTable(
   "rules",
   {
@@ -215,3 +346,9 @@ export type TransactionSource = typeof transactionSources.$inferSelect;
 export type NewTransactionSource = typeof transactionSources.$inferInsert;
 export type Person = typeof people.$inferSelect;
 export type Rule = typeof rules.$inferSelect;
+export type MerchantLabel = typeof merchantLabels.$inferSelect;
+export type NewMerchantLabel = typeof merchantLabels.$inferInsert;
+export type LocationImport = typeof locationImports.$inferSelect;
+export type NewLocationImport = typeof locationImports.$inferInsert;
+export type LocationRecord = typeof locationRecords.$inferSelect;
+export type NewLocationRecord = typeof locationRecords.$inferInsert;

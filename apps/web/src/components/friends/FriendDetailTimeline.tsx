@@ -7,6 +7,7 @@ import type {
   ItemEnrichment,
 } from "@/lib/repo";
 import { fmtInr, fmtDate } from "@/lib/format";
+import { Ico } from "@/components/Ico";
 import { ShareTxnModal, type PersonOption } from "./ShareTxnModal";
 
 type SharedTxn = DrillDownTxn & {
@@ -71,60 +72,117 @@ export function FriendDetailTimeline({
     setEditing(r);
   }
 
+  const counts = {
+    all: directTxns.length + sharedTxns.length,
+    direct: directTxns.length,
+    shared: sharedTxns.length,
+  } as const;
+
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-      <div className="flex items-baseline justify-between gap-4">
-        <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-          Activity
-        </h3>
-        <div className="flex items-center gap-1 rounded-md border border-zinc-200 p-0.5 text-xs dark:border-zinc-800">
+    <div className="surface flex flex-col" style={{ padding: 18, gap: 12 }}>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2">
+          <Ico name="book" size={13} className="accent" />
+          <span className="eyebrow">Activity</span>
+        </div>
+        <div
+          className="flex items-center"
+          style={{
+            background: "var(--surface-2)",
+            border: "1px solid var(--border)",
+            borderRadius: 7,
+            padding: 2,
+            gap: 2,
+          }}
+        >
           {(["all", "direct", "shared"] as const).map((f) => (
             <button
               key={f}
               type="button"
               onClick={() => setFilter(f)}
-              className={`rounded px-2 py-1 capitalize transition-colors ${
-                filter === f
-                  ? "bg-zinc-900 text-white dark:bg-zinc-700"
-                  : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
-              }`}
+              className="capitalize"
+              style={{
+                padding: "4px 10px",
+                background:
+                  filter === f ? "var(--surface)" : "transparent",
+                border: "none",
+                borderRadius: 5,
+                fontFamily: "inherit",
+                fontSize: 11.5,
+                cursor: "pointer",
+                color: filter === f ? "var(--fg)" : "var(--muted)",
+              }}
             >
-              {f}
+              {f}{" "}
+              <span className="mono tabular muted-2" style={{ marginLeft: 2 }}>
+                {counts[f]}
+              </span>
             </button>
           ))}
         </div>
       </div>
 
+      <hr className="hr-dashed" />
+
       {rows.length === 0 ? (
-        <p className="mt-4 text-center text-sm text-zinc-500 dark:text-zinc-400">
-          No matching activity.
-        </p>
+        <div
+          className="surface-dashed flex flex-col items-center justify-center"
+          style={{ padding: 32, gap: 8 }}
+        >
+          <Ico name="inbox" size={20} className="muted" />
+          <span className="small muted">No matching activity.</span>
+        </div>
       ) : (
-        <ul className="mt-3 divide-y divide-zinc-100 dark:divide-zinc-800">
+        <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
           {rows.map((r) => (
-            <li key={r.key} className="py-2.5">
+            <li key={r.key}>
               <button
                 type="button"
                 onClick={() => openShareModal(r)}
-                className="flex w-full items-center justify-between gap-3 rounded-md px-1 py-1 text-left hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
+                className="flex items-center justify-between gap-3"
+                style={{
+                  width: "100%",
+                  padding: "10px 8px",
+                  textAlign: "left",
+                  background: "transparent",
+                  border: "none",
+                  borderBottom: "1px dashed var(--border-dashed)",
+                  cursor: "pointer",
+                  color: "inherit",
+                  fontFamily: "inherit",
+                }}
               >
-                <div className="flex min-w-0 items-center gap-3">
+                <div
+                  className="flex items-center gap-3"
+                  style={{ minWidth: 0, flex: 1 }}
+                >
                   <RowTypePill row={r} personDisplayName={person.displayName} />
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-50">
+                  <div className="flex flex-col" style={{ minWidth: 0, gap: 2 }}>
+                    <span
+                      className="fg-2"
+                      style={{
+                        fontSize: 13.5,
+                        fontWeight: 500,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
                       {r.txn.counterparty || r.txn.narration || "—"}
-                    </div>
-                    <div className="mt-0.5 flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
+                    </span>
+                    <div className="flex items-center gap-2 tiny muted">
                       <span>{fmtDate(r.date)}</span>
-                      {r.time && <span className="tabular-nums">{r.time}</span>}
+                      {r.time && (
+                        <span className="mono tabular">{r.time}</span>
+                      )}
                       {r.txn.category && (
-                        <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800">
+                        <span className="chip chip-sm ghost" style={{ fontSize: 10 }}>
                           {r.txn.category}
                         </span>
                       )}
                       {r.kind === "shared" && (
-                        <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300">
-                          {r.txn.shareCount}-way split
+                        <span className="chip chip-sm accent" style={{ fontSize: 10 }}>
+                          <Ico name="split" size={13} /> {r.txn.shareCount}-way
                         </span>
                       )}
                     </div>
@@ -167,23 +225,50 @@ function RowTypePill({ row, personDisplayName }: { row: Row; personDisplayName: 
   if (row.kind === "direct") {
     if (row.txn.withdrawal != null) {
       return (
-        <span className="shrink-0 rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
-          You → {first}
+        <span
+          className="chip chip-sm"
+          style={{
+            flexShrink: 0,
+            fontSize: 10,
+            color: "var(--debit)",
+            borderColor: "var(--debit)",
+            background: "color-mix(in srgb, var(--debit) 6%, transparent)",
+          }}
+        >
+          <Ico name="arrow-right" size={13} /> You → {first}
         </span>
       );
     }
     return (
-      <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
-        {first} → You
+      <span
+        className="chip chip-sm"
+        style={{
+          flexShrink: 0,
+          fontSize: 10,
+          color: "var(--credit)",
+          borderColor: "var(--credit)",
+          background: "color-mix(in srgb, var(--credit) 6%, transparent)",
+        }}
+      >
+        <Ico name="arrow-left" size={13} /> {first} → You
       </span>
     );
   }
   return (
-    <span className="shrink-0 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300">
-      Shared
+    <span
+      className="chip chip-sm accent"
+      style={{ flexShrink: 0, fontSize: 10 }}
+    >
+      <Ico name="split" size={13} /> Shared
     </span>
   );
 }
+
+const ITEM_ICON: Record<string, "split" | "book" | "users" | "sparkles"> = {
+  instamart: "users",
+  zomato_dining: "users",
+  zomato_delivery: "users",
+};
 
 /**
  * Inline item-level breakdown for Swiggy / Zomato shared / direct rows.
@@ -194,28 +279,27 @@ function ItemList({ items }: { items: ItemEnrichment }) {
   const MAX = 5;
   const head = items.items.slice(0, MAX);
   const extra = items.items.length - head.length;
-  const iconForKind = (kind: string): string => {
-    if (kind === "instamart") return "🛒";
-    if (kind === "zomato_dining") return "🍽️";
-    if (kind === "zomato_delivery") return "🛵";
-    return "🍔";
-  };
+  const iconName = ITEM_ICON[items.kind] ?? "sparkles";
+
   return (
-    <div className="mt-1 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-xs text-zinc-600 dark:text-zinc-400">
-      <span className="text-[11px]">{iconForKind(items.kind)}</span>
+    <div
+      className="flex items-baseline tiny muted"
+      style={{ flexWrap: "wrap", gap: "0 6px", marginTop: 2 }}
+    >
+      <Ico name={iconName} size={13} />
       {items.restaurant && (
-        <span className="font-medium text-zinc-700 dark:text-zinc-300">
+        <span className="fg-2" style={{ fontWeight: 500 }}>
           {items.restaurant.split(",")[0]}
         </span>
       )}
       {head.map((it, i) => (
-        <span key={`${it.name}-${i}`} className="whitespace-nowrap">
+        <span key={`${it.name}-${i}`} style={{ whiteSpace: "nowrap" }}>
           {i === 0 && !items.restaurant ? "" : "·"} {it.name}
           {it.qty > 1 ? ` ×${it.qty}` : ""}
         </span>
       ))}
       {extra > 0 && (
-        <span className="italic text-zinc-500 dark:text-zinc-500">
+        <span className="muted-2" style={{ fontStyle: "italic" }}>
           + {extra} more
         </span>
       )}
@@ -228,29 +312,38 @@ function RowAmount({ row, personDisplayName }: { row: Row; personDisplayName: st
   if (row.kind === "direct") {
     if (row.txn.withdrawal != null) {
       return (
-        <div className="shrink-0 text-right">
-          <div className="text-sm font-medium tabular-nums text-rose-700 dark:text-rose-400">
+        <div
+          className="flex flex-col items-end"
+          style={{ flexShrink: 0, gap: 2 }}
+        >
+          <span className="num-amount debit" style={{ fontSize: 14 }}>
             −{fmtInr(row.txn.withdrawal)}
-          </div>
+          </span>
         </div>
       );
     }
     return (
-      <div className="shrink-0 text-right">
-        <div className="text-sm font-medium tabular-nums text-emerald-700 dark:text-emerald-400">
+      <div
+        className="flex flex-col items-end"
+        style={{ flexShrink: 0, gap: 2 }}
+      >
+        <span className="num-amount credit" style={{ fontSize: 14 }}>
           +{fmtInr(row.txn.deposit ?? 0)}
-        </div>
+        </span>
       </div>
     );
   }
   return (
-    <div className="shrink-0 text-right">
-      <div className="text-sm font-medium tabular-nums text-zinc-900 dark:text-zinc-50">
+    <div
+      className="flex flex-col items-end"
+      style={{ flexShrink: 0, gap: 2 }}
+    >
+      <span className="mono tabular fg-2" style={{ fontSize: 14 }}>
         {fmtInr(row.txn.withdrawal ?? 0)}
-      </div>
-      <div className="text-xs text-zinc-500 dark:text-zinc-400">
-        {first}: {fmtInr(row.txn.perHead)}
-      </div>
+      </span>
+      <span className="tiny muted">
+        {first}: <span className="mono">{fmtInr(row.txn.perHead)}</span>
+      </span>
     </div>
   );
 }

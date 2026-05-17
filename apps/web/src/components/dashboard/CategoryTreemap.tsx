@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import type { CategoryTreeLeaf } from "@/lib/repo";
 import { fmtInr } from "@/lib/format";
 import { ResponsiveContainer, Tooltip, Treemap } from "recharts";
@@ -10,79 +11,89 @@ import { ChartFrame } from "./ChartFrame";
  * in that subcategory. Eyeballable answer to "where does my money go?".
  *
  * Hover shows exact amount + txn count for that leaf.
+ *
+ * Colors are drawn from a sequential mix of --accent with --surface so the
+ * palette tracks the active theme — biggest groups land on full accent, the
+ * tail fades toward surface.
  */
 export function CategoryTreemap({ leaves }: { leaves: CategoryTreeLeaf[] }) {
+  // Roll up leaves into a recharts-friendly hierarchy. Memoized so the
+  // recharts treemap doesn't reflow on every render.
+  const data = useMemo(() => {
+    const byGroup = new Map<string, CategoryTreeLeaf[]>();
+    for (const leaf of leaves) {
+      const arr = byGroup.get(leaf.group) ?? [];
+      arr.push(leaf);
+      byGroup.set(leaf.group, arr);
+    }
+    return [...byGroup.entries()]
+      .map(([group, items]) => ({
+        name: group,
+        children: items.map((it) => ({
+          name: it.subcategory,
+          size: Math.round(it.totalOut),
+          txns: it.txnCount,
+        })),
+      }))
+      .sort(
+        (a, b) =>
+          b.children.reduce((s, c) => s + c.size, 0) -
+          a.children.reduce((s, c) => s + c.size, 0),
+      );
+  }, [leaves]);
+
   if (leaves.length === 0) {
     return (
-      <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-        <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-          Category breakdown
-        </h3>
-        <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">
+      <div className="surface" style={{ padding: 20 }}>
+        <span className="eyebrow">Category breakdown</span>
+        <p className="small" style={{ marginTop: 8 }}>
           No categorized spend yet — rules engine hasn&apos;t tagged any txns.
         </p>
       </div>
     );
   }
 
-  // Roll up leaves into a recharts-friendly hierarchy.
-  const byGroup = new Map<string, CategoryTreeLeaf[]>();
-  for (const leaf of leaves) {
-    const arr = byGroup.get(leaf.group) ?? [];
-    arr.push(leaf);
-    byGroup.set(leaf.group, arr);
-  }
-
-  const data = [...byGroup.entries()]
-    .map(([group, items]) => ({
-      name: group,
-      children: items.map((it) => ({
-        name: it.subcategory,
-        size: Math.round(it.totalOut),
-        txns: it.txnCount,
-      })),
-    }))
-    .sort(
-      (a, b) =>
-        b.children.reduce((s, c) => s + c.size, 0) -
-        a.children.reduce((s, c) => s + c.size, 0),
-    );
-
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+    <div className="surface" style={{ padding: 20 }}>
       <div className="flex items-baseline justify-between">
-        <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-          Where your money goes
-        </h3>
-        <span className="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">block size = total spend</span>
+        <div className="flex flex-col gap-1">
+          <span className="eyebrow">Category breakdown</span>
+          <h3 className="h2">Where your money goes</h3>
+        </div>
+        <span className="tiny">block size = total spend</span>
       </div>
       <ChartFrame height={320}>
         <ResponsiveContainer>
           <Treemap
             data={data}
             dataKey="size"
-            stroke="rgba(255,255,255,0.6)"
-            fill="#6366f1"
+            stroke="var(--surface)"
+            fill="var(--accent)"
             content={<TreemapNode />}
           >
             <Tooltip
-              cursor={{ stroke: "#a5b4fc", strokeWidth: 1 }}
+              cursor={{ stroke: "var(--accent)", strokeWidth: 1 }}
               wrapperStyle={{ outline: "none" }}
               contentStyle={{
                 borderRadius: 8,
-                border: "1px solid rgba(113,113,122,0.3)",
-                background: "rgba(24,24,27,0.94)",
-                color: "#fafafa",
+                border: "1px solid var(--border-strong)",
+                background: "var(--surface)",
+                color: "var(--fg)",
                 fontSize: 12,
                 padding: "8px 12px",
               }}
-              labelStyle={{ color: "#e4e4e7" }}
-              itemStyle={{ color: "#fafafa" }}
+              labelStyle={{ color: "var(--fg-2)" }}
+              itemStyle={{ color: "var(--fg)" }}
               formatter={(value, _name, item) => {
-                const p = (item as { payload?: { name: string; txns?: number } })?.payload;
+                const p = (
+                  item as { payload?: { name: string; txns?: number } }
+                )?.payload;
                 const n = typeof value === "number" ? value : Number(value ?? 0);
                 if (!p) return [fmtInr(n), ""];
-                return [`${fmtInr(n)}${p.txns ? ` (${p.txns} txns)` : ""}`, p.name];
+                return [
+                  `${fmtInr(n)}${p.txns ? ` (${p.txns} txns)` : ""}`,
+                  p.name,
+                ];
               }}
             />
           </Treemap>
@@ -92,17 +103,20 @@ export function CategoryTreemap({ leaves }: { leaves: CategoryTreeLeaf[] }) {
   );
 }
 
+// Accent-derived sequential palette. recharts can't read CSS vars from
+// element style, so we use color-mix() literal strings — browsers resolve
+// them at paint time, picking up the active --accent / --surface.
 const PALETTE = [
-  "#4f46e5", // indigo-600
-  "#7c3aed", // violet-600
-  "#0891b2", // cyan-600
-  "#059669", // emerald-600
-  "#d97706", // amber-600
-  "#dc2626", // red-600
-  "#db2777", // pink-600
-  "#65a30d", // lime-600
-  "#0284c7", // sky-600
-  "#7e22ce", // purple-700
+  "var(--accent)",
+  "color-mix(in srgb, var(--accent) 82%, var(--surface) 18%)",
+  "color-mix(in srgb, var(--accent) 64%, var(--surface) 36%)",
+  "color-mix(in srgb, var(--accent) 50%, var(--surface) 50%)",
+  "color-mix(in srgb, var(--accent) 38%, var(--surface) 62%)",
+  "color-mix(in srgb, var(--accent) 28%, var(--surface) 72%)",
+  "color-mix(in srgb, var(--accent) 20%, var(--surface) 80%)",
+  "color-mix(in srgb, var(--accent) 14%, var(--surface) 86%)",
+  "color-mix(in srgb, var(--accent) 10%, var(--surface) 90%)",
+  "var(--accent-soft)",
 ];
 
 interface NodeProps {
@@ -118,14 +132,16 @@ interface NodeProps {
 }
 
 function TreemapNode(props: NodeProps) {
-  const { x = 0, y = 0, width = 0, height = 0, index = 0, name, depth = 0, root } = props;
+  const {
+    x = 0,
+    y = 0,
+    width = 0,
+    height = 0,
+    index = 0,
+    name,
+    depth = 0,
+  } = props;
   if (depth === 1) {
-    // Leaf: subcategory rectangle.
-    const parentIdx = (root?.children ?? []).findIndex((c) =>
-      // recharts doesn't pass parent ref directly; map by name match
-      Object.is(c, c),
-    );
-    void parentIdx;
     const colour = PALETTE[index % PALETTE.length]!;
     return (
       <g>
@@ -135,17 +151,17 @@ function TreemapNode(props: NodeProps) {
           width={width}
           height={height}
           fill={colour}
-          stroke="#fff"
+          stroke="var(--surface)"
           strokeWidth={2}
-          rx={3}
+          rx={4}
         />
         {width > 60 && height > 20 && (
           <text
-            x={x + 6}
-            y={y + 16}
+            x={x + 8}
+            y={y + 18}
             fontSize={11}
-            fill="#fff"
-            fontFamily="ui-sans-serif, system-ui"
+            fill="var(--accent-ink)"
+            fontFamily="var(--font-sans)"
           >
             {name}
           </text>
@@ -153,7 +169,7 @@ function TreemapNode(props: NodeProps) {
       </g>
     );
   }
-  // Group: just outline (recharts will draw the children).
+  // Group: just outline (recharts draws the children).
   return (
     <g>
       <rect
@@ -161,8 +177,8 @@ function TreemapNode(props: NodeProps) {
         y={y}
         width={width}
         height={height}
-        fill="rgba(0,0,0,0)"
-        stroke="rgba(0,0,0,0.08)"
+        fill="transparent"
+        stroke="var(--border)"
         strokeWidth={1}
       />
     </g>

@@ -22,6 +22,7 @@ import {
   getTransactionForReview,
   getReviewFilterMeta,
   getTimeBuckets,
+  listCustomCategories,
   type ReviewListFilter,
 } from "@/lib/review-repo";
 import { listKnownPeople } from "../friends/actions";
@@ -53,6 +54,8 @@ export default async function ReviewPage({ searchParams }: PageProps) {
   const sp = await searchParams;
   const sortParam = readStr(sp.sort);
   const todParam = readStr(sp.tod);
+  const shareParam = readStr(sp.share);
+  const recParam = readStr(sp.rec);
   const filter: ReviewListFilter = {
     from: readStr(sp.from),
     to: readStr(sp.to),
@@ -69,13 +72,18 @@ export default async function ReviewPage({ searchParams }: PageProps) {
       todParam === "night"
         ? todParam
         : null,
+    shareStatus:
+      shareParam === "personal" || shareParam === "shared" ? shareParam : null,
+    recurrenceClass:
+      recParam === "one_time" || recParam === "recurring" ? recParam : null,
   };
 
-  const [list, meta, people, buckets] = await Promise.all([
+  const [list, meta, people, buckets, customCategories] = await Promise.all([
     listTransactionsForReview(filter),
     getReviewFilterMeta(),
     listKnownPeople(),
     getTimeBuckets(filter),
+    listCustomCategories(),
   ]);
 
   // Pick the active row: explicit ?id wins; otherwise first unreviewed in the
@@ -97,6 +105,7 @@ export default async function ReviewPage({ searchParams }: PageProps) {
       buckets={buckets}
       activeId={activeId}
       activeDetail={detail}
+      customCategories={customCategories}
     />
   );
 }

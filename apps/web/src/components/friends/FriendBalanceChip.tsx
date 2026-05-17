@@ -2,7 +2,8 @@ import { fmtInr } from "@/lib/format";
 
 /**
  * "Rahul owes you ₹500" / "You owe Rahul ₹500" / "Settled" visual chip.
- * Positive net = friend owes you, negative = you owe them.
+ * Positive net = friend owes you, negative = you owe them. Rendered with
+ * the design system's .chip primitives — credit/debit accents inline.
  */
 export function FriendBalanceChip({
   net,
@@ -14,12 +15,13 @@ export function FriendBalanceChip({
   size?: "sm" | "md" | "lg";
 }) {
   const abs = Math.abs(net);
+  const cls = size === "sm" ? "chip chip-sm" : "chip";
+  const fontSize = size === "lg" ? 13.5 : size === "md" ? 12 : 11;
+
   // Within ₹10 → call it settled. Avoids "₹2 owed" floating-point clutter.
   if (abs < 10) {
     return (
-      <span
-        className={`inline-flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400 ${SIZES[size]}`}
-      >
+      <span className={`${cls} ghost`} style={{ fontSize }}>
         Settled
       </span>
     );
@@ -27,25 +29,33 @@ export function FriendBalanceChip({
   if (net > 0) {
     return (
       <span
-        className={`inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700 ring-1 ring-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-900 ${SIZES[size]}`}
+        className={cls}
+        style={{
+          fontSize,
+          color: "var(--credit)",
+          borderColor: "var(--credit)",
+          background: "color-mix(in srgb, var(--credit) 8%, transparent)",
+        }}
         title={`${displayName} owes you ${fmtInr(abs)}`}
       >
-        {displayName.split(" ")[0]} owes you {fmtInr(abs)}
+        {displayName.split(" ")[0]} owes you{" "}
+        <span className="mono tabular">{fmtInr(abs)}</span>
       </span>
     );
   }
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 font-medium text-rose-700 ring-1 ring-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:ring-rose-900 ${SIZES[size]}`}
+      className={cls}
+      style={{
+        fontSize,
+        color: "var(--debit)",
+        borderColor: "var(--debit)",
+        background: "color-mix(in srgb, var(--debit) 8%, transparent)",
+      }}
       title={`You owe ${displayName} ${fmtInr(abs)}`}
     >
-      You owe {displayName.split(" ")[0]} {fmtInr(abs)}
+      You owe {displayName.split(" ")[0]}{" "}
+      <span className="mono tabular">{fmtInr(abs)}</span>
     </span>
   );
 }
-
-const SIZES = {
-  sm: "text-[10px]",
-  md: "text-xs",
-  lg: "text-sm",
-};

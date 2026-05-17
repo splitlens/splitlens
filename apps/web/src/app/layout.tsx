@@ -1,18 +1,21 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Hanken_Grotesk, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { TopNav } from "@/components/TopNav";
+import { PaletteBoot } from "@/components/PaletteBoot";
 
-const geistSans = Geist({
+// Confident-and-financial type stack (Mercury / Ramp adjacent):
+//   Hanken Grotesk → everything: body, labels, headlines, amounts
+//   Geist Mono     → UTRs, refs, kbd — anywhere mono is semantically right
+const hanken = Hanken_Grotesk({
   subsets: ["latin"],
-  variable: "--font-geist-sans",
   display: "swap",
+  variable: "--font-sans",
 });
-
 const geistMono = Geist_Mono({
   subsets: ["latin"],
-  variable: "--font-geist-mono",
   display: "swap",
+  variable: "--font-mono",
 });
 
 export const metadata: Metadata = {
@@ -60,8 +63,13 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning className={`${geistSans.variable} ${geistMono.variable}`}>
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={`${hanken.variable} ${geistMono.variable}`}
+    >
       <body>
+        <PaletteBoot />
         <TopNav />
         {children}
       </body>

@@ -27,6 +27,8 @@ export {
 } from "./zepto-invoice";
 export {
   writeForcedAttachment,
+  scopedForcedAttachmentHash,
+  isForcedAttachmentDuplicate,
   type ForcedAttachmentOutcome,
   type WriteForcedAttachmentArgs,
 } from "./forced-attachment";
@@ -50,3 +52,17 @@ export {
   extractTextPagesFromFile,
   extractPagesPositional,
 } from "./extract-pdf";
+export {
+  ingestTakeoutZip,
+  ingestRecordsJson,
+  ingestSemanticMonthJson,
+  parseSemanticMonth,
+  parseRecordsJson,
+  readTakeoutZip,
+  hashTakeoutBytes,
+  type RawLocationRecord,
+  type SemanticStay,
+  type TakeoutContents,
+  type TakeoutIngestOutcome,
+  type TakeoutIngestOptions,
+} from "./google-timeline";

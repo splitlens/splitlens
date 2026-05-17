@@ -1,156 +1,326 @@
 /**
  * SplitLens — landing page
- * Local-first hero. Privacy as the wedge. Honest CTAs.
+ *
+ * Reskinned to the canonical design system: serif hero display, mono eyebrows,
+ * `.surface` cards, accent-token CTAs, line icons in place of emoji. The
+ * marketing intent is unchanged — local-first as the wedge, honest copy about
+ * pre-MVP status, two CTAs (try it / star repo).
  */
+import Link from "next/link";
+
+import { Ico } from "@/components/Ico";
+
 export default function HomePage() {
   return (
-    <main className="mx-auto max-w-5xl px-6 py-20">
-      {/* Hero */}
-      <section className="space-y-8">
-        <div className="flex items-center gap-2 text-sm text-[color:var(--color-muted)]">
-          <span className="inline-flex items-center rounded-full border border-[color:var(--color-border)] bg-[color:var(--color-card)] px-3 py-1">
-            🔒 100% on your device · open source · AGPL-3.0
+    <main
+      style={{
+        maxWidth: 1080,
+        margin: "0 auto",
+        padding: "64px 40px 96px",
+      }}
+    >
+      {/* ── Hero ────────────────────────────────────────────────── */}
+      <section className="flex flex-col" style={{ gap: 28 }}>
+        <div className="flex items-center gap-3" style={{ flexWrap: "wrap" }}>
+          <span className="eyebrow eyebrow-accent">SplitLens · local-first</span>
+          <span className="tag">
+            <Ico name="eye" size={13} className="accent" />
+            100% on your device
+            <span className="muted-2">/</span>
+            open source
+            <span className="muted-2">/</span>
+            AGPL-3.0
           </span>
         </div>
 
-        <h1 className="text-5xl font-bold leading-[1.05] tracking-tight md:text-6xl">
-          Your bank statements. <br />
-          <span className="text-[color:var(--color-accent)]">Your spending, clearly.</span>
+        <h1
+          className="hero-display"
+          style={{ fontSize: 72, margin: 0, maxWidth: 880 }}
+        >
+          Your bank statements.{" "}
+          <span style={{ fontStyle: "italic", color: "var(--accent)" }}>
+            Your spending, clearly.
+          </span>
         </h1>
 
-        <p className="max-w-2xl text-xl text-[color:var(--color-muted)]">
-          Drop your HDFC PDFs. SplitLens parses them, categorizes every transaction, and shows you
-          where your money actually went — split shared expenses with flatmates, settle cleanly.{" "}
-          <strong className="text-[color:var(--color-fg)]">Nothing leaves your browser.</strong>
+        <p className="body" style={{ maxWidth: 680, fontSize: 16 }}>
+          Drop your HDFC PDFs. SplitLens parses them, categorises every
+          transaction, and shows you where your money actually went — split
+          shared expenses with flatmates, settle cleanly.{" "}
+          <span className="fg-2" style={{ fontWeight: 500 }}>
+            Nothing leaves your browser.
+          </span>
         </p>
 
-        <div className="flex flex-wrap gap-3">
-          <a
-            href="/try"
-            className="inline-flex items-center justify-center rounded-md bg-[color:var(--color-accent)] px-6 py-3 font-semibold text-[color:var(--color-accent-fg)] transition-opacity hover:opacity-90"
-          >
-            Try it now (free)
-          </a>
+        <div className="flex items-center gap-3" style={{ flexWrap: "wrap" }}>
+          <Link href="/try" className="btn btn-lg primary">
+            Try it now <Ico name="arrow-right" size={16} />
+          </Link>
           <a
             href="https://github.com/splitlens/splitlens"
-            className="inline-flex items-center justify-center rounded-md border border-[color:var(--color-border)] bg-[color:var(--color-card)] px-6 py-3 font-semibold transition-colors hover:border-[color:var(--color-accent)]"
+            className="btn btn-lg outline"
           >
-            Star on GitHub →
+            <Ico name="book" size={16} /> Star on GitHub
           </a>
         </div>
 
-        <p className="text-sm text-[color:var(--color-muted)]">
-          Built for India 🇮🇳 · No signup · Single device for v1 · Currently in pre-MVP
-        </p>
+        <div
+          className="flex items-center gap-3 small"
+          style={{ flexWrap: "wrap", marginTop: 4 }}
+        >
+          <span className="chip chip-sm">Built for India</span>
+          <span className="chip chip-sm ghost">No signup</span>
+          <span className="chip chip-sm ghost">Single device · v1</span>
+          <span className="chip chip-sm ghost">Pre-MVP</span>
+        </div>
       </section>
 
-      <hr className="my-20 border-[color:var(--color-border)]" />
+      <hr className="hr-dashed" style={{ margin: "72px 0" }} />
 
-      {/* Why local-first */}
-      <section className="space-y-12">
-        <h2 className="text-3xl font-bold">Why local-first?</h2>
-        <div className="grid gap-8 md:grid-cols-3">
-          <Card
-            icon="🛡️"
+      {/* ── Why local-first ─────────────────────────────────────── */}
+      <section className="flex flex-col" style={{ gap: 28 }}>
+        <div className="flex flex-col" style={{ gap: 8 }}>
+          <span className="eyebrow">Why local-first</span>
+          <h2 className="display" style={{ fontSize: 36, margin: 0 }}>
+            Three reasons we don&rsquo;t have a backend.
+          </h2>
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(3, 1fr)",
+            gap: 16,
+          }}
+        >
+          <PrincipleCard
+            beat="01"
+            icon="eye"
             title="Zero compliance risk"
             body="No backend processing your statements means there's nothing for us to leak, lose, or hand over."
           />
-          <Card
-            icon="🔍"
+          <PrincipleCard
+            beat="02"
+            icon="book"
             title="Open source — verify it"
             body="Every line of code that touches your data is on GitHub under AGPL-3.0. Read the source. Audit the network tab."
           />
-          <Card
-            icon="🇮🇳"
+          <PrincipleCard
+            beat="03"
+            icon="flag"
             title="Built for Indian banks"
             body="HDFC savings + credit card supported at launch. ICICI / Axis / SBI coming based on your votes."
           />
         </div>
       </section>
 
-      <hr className="my-20 border-[color:var(--color-border)]" />
+      <hr className="hr-dashed" style={{ margin: "72px 0" }} />
 
-      {/* What you can do */}
-      <section className="space-y-12">
-        <h2 className="text-3xl font-bold">What you can do</h2>
-        <ul className="grid gap-6 md:grid-cols-2">
-          <Feature
-            title="📊 See where your money goes"
+      {/* ── What you can do ────────────────────────────────────── */}
+      <section className="flex flex-col" style={{ gap: 28 }}>
+        <div className="flex flex-col" style={{ gap: 8 }}>
+          <span className="eyebrow">What you can do</span>
+          <h2 className="display" style={{ fontSize: 36, margin: 0 }}>
+            Four jobs the app already does.
+          </h2>
+        </div>
+
+        <ul
+          style={{
+            listStyle: "none",
+            margin: 0,
+            padding: 0,
+            display: "grid",
+            gridTemplateColumns: "repeat(2, 1fr)",
+            gap: 14,
+          }}
+        >
+          <FeatureRow
+            icon="trending-up"
+            title="See where your money goes"
             body="Interactive sunburst — click any category to drill in. Monthly reports with anomaly flags."
+            tags={["Dashboard", "Sunburst"]}
           />
-          <Feature
-            title="🤝 Split shared expenses"
+          <FeatureRow
+            icon="users"
+            title="Split shared expenses"
             body="Mark a transaction as shared with flatmates. Auto-computed settlements. Net balance per person."
+            tags={["Friends", "Settle"]}
           />
-          <Feature
-            title="🚬 Track personal habits"
+          <FeatureRow
+            icon="repeat"
+            title="Track personal habits"
             body="Define your own categories — cigarettes, takeout, subscriptions. Watch the trend over time."
+            tags={["Custom categories"]}
           />
-          <Feature
-            title="💡 Smart suggestions"
+          <FeatureRow
+            icon="sparkles"
+            title="Smart suggestions"
             body="The more you tag, the smarter it gets. One-click bulk re-tag for similar transactions."
+            tags={["Auto-categorise", "Bulk"]}
           />
         </ul>
       </section>
 
-      <hr className="my-20 border-[color:var(--color-border)]" />
+      <hr className="hr-dashed" style={{ margin: "72px 0" }} />
 
+      {/* ── Pre-MVP CTA card ───────────────────────────────────── */}
       <section
         id="try"
-        className="space-y-6 rounded-xl border border-[color:var(--color-border)] bg-[color:var(--color-card)] p-10"
+        className="surface"
+        style={{ padding: 36, display: "flex", flexDirection: "column", gap: 18 }}
       >
-        <h2 className="text-3xl font-bold">Pre-MVP — coming soon</h2>
-        <p className="text-[color:var(--color-muted)]">
-          We&apos;re building in the open. Public launch on ProductHunt is targeted for Week 9. Star
-          the repo to follow along, and you&apos;ll be first to know when the beta opens.
+        <div className="flex items-center gap-3">
+          <span className="eyebrow eyebrow-accent">Status · pre-MVP</span>
+          <span className="tag">
+            <span className="dot warn" /> building in the open
+          </span>
+        </div>
+        <h2 className="display" style={{ fontSize: 32, margin: 0 }}>
+          Public launch targeted for Week 9.
+        </h2>
+        <p className="body" style={{ margin: 0, maxWidth: 680 }}>
+          Star the repo to follow along — you&rsquo;ll be first to know when the
+          beta opens. Until then the <code className="kbd">/try</code> route is
+          a working preview against your own PDFs, fully local.
         </p>
-        <div className="flex flex-wrap gap-3">
+        <div className="flex items-center gap-3" style={{ flexWrap: "wrap" }}>
           <a
             href="https://github.com/splitlens/splitlens"
-            className="inline-flex items-center justify-center rounded-md bg-[color:var(--color-accent)] px-6 py-3 font-semibold text-[color:var(--color-accent-fg)] hover:opacity-90"
+            className="btn primary"
           >
-            ⭐ Star on GitHub
+            <Ico name="book" size={13} /> Star on GitHub
           </a>
-          <a
-            href="/privacy"
-            className="inline-flex items-center justify-center rounded-md border border-[color:var(--color-border)] px-6 py-3 font-semibold hover:border-[color:var(--color-accent)]"
-          >
-            How we keep you private →
-          </a>
+          <Link href="/privacy" className="btn outline">
+            How we keep you private <Ico name="arrow-right" size={13} />
+          </Link>
         </div>
       </section>
 
-      <footer className="mt-20 border-t border-[color:var(--color-border)] pt-8 text-sm text-[color:var(--color-muted)]">
-        <p>
-          SplitLens · AGPL-3.0 · Built by{" "}
+      {/* ── Footer ─────────────────────────────────────────────── */}
+      <footer
+        className="flex items-center"
+        style={{
+          marginTop: 64,
+          paddingTop: 24,
+          borderTop: "1px solid var(--border)",
+          gap: 12,
+          flexWrap: "wrap",
+        }}
+      >
+        <span className="small">
+          SplitLens <span className="muted-2">·</span> AGPL-3.0{" "}
+          <span className="muted-2">·</span> built by{" "}
           <a
             href="https://github.com/prateekaryyan"
-            className="underline hover:text-[color:var(--color-fg)]"
+            style={{ color: "var(--fg-2)", textDecoration: "underline" }}
           >
             Prateek Aryan
           </a>{" "}
-          · Made in Bangalore
-        </p>
+          <span className="muted-2">·</span> made in Bangalore
+        </span>
       </footer>
     </main>
   );
 }
 
-function Card({ icon, title, body }: { icon: string; title: string; body: string }) {
+// ────────────────────────────────────────────────────────────────────────────
+// Local sub-components — each used in exactly one section above. Keeping them
+// inline so the whole landing surface reads top-to-bottom in one file.
+// ────────────────────────────────────────────────────────────────────────────
+
+function PrincipleCard({
+  beat,
+  icon,
+  title,
+  body,
+}: {
+  beat: string;
+  icon: Parameters<typeof Ico>[0]["name"];
+  title: string;
+  body: string;
+}) {
   return (
-    <div className="rounded-xl border border-[color:var(--color-border)] bg-[color:var(--color-card)] p-6">
-      <div className="mb-3 text-3xl">{icon}</div>
-      <h3 className="mb-2 text-lg font-semibold">{title}</h3>
-      <p className="text-[color:var(--color-muted)]">{body}</p>
-    </div>
+    <article
+      className="surface flex flex-col"
+      style={{ padding: 20, gap: 12 }}
+    >
+      <div className="flex items-center justify-between">
+        <span
+          className="mono"
+          style={{
+            fontSize: 11,
+            color: "var(--muted-2)",
+            letterSpacing: "0.08em",
+          }}
+        >
+          {beat}
+        </span>
+        <span
+          className="flex items-center justify-center"
+          style={{
+            width: 28,
+            height: 28,
+            borderRadius: 6,
+            background: "var(--accent-soft)",
+            color: "var(--accent)",
+            border: "1px solid var(--accent-line)",
+          }}
+        >
+          <Ico name={icon} size={16} />
+        </span>
+      </div>
+      <h3 className="h2">{title}</h3>
+      <p className="body" style={{ margin: 0 }}>
+        {body}
+      </p>
+    </article>
   );
 }
 
-function Feature({ title, body }: { title: string; body: string }) {
+function FeatureRow({
+  icon,
+  title,
+  body,
+  tags,
+}: {
+  icon: Parameters<typeof Ico>[0]["name"];
+  title: string;
+  body: string;
+  tags: string[];
+}) {
   return (
-    <li className="rounded-lg border border-[color:var(--color-border)] bg-[color:var(--color-card)] p-5">
-      <h3 className="mb-2 font-semibold">{title}</h3>
-      <p className="text-sm text-[color:var(--color-muted)]">{body}</p>
+    <li className="surface flex" style={{ padding: 18, gap: 14 }}>
+      <span
+        className="flex items-center justify-center"
+        style={{
+          width: 32,
+          height: 32,
+          flexShrink: 0,
+          borderRadius: 8,
+          background: "var(--surface-2)",
+          color: "var(--fg-2)",
+          border: "1px solid var(--border)",
+        }}
+      >
+        <Ico name={icon} size={16} />
+      </span>
+      <div className="flex flex-col" style={{ gap: 6, minWidth: 0 }}>
+        <h3 className="h2">{title}</h3>
+        <p className="small" style={{ margin: 0, color: "var(--fg-2)" }}>
+          {body}
+        </p>
+        <div
+          className="flex items-center gap-1"
+          style={{ marginTop: 2, flexWrap: "wrap" }}
+        >
+          {tags.map((t) => (
+            <span key={t} className="chip chip-sm ghost">
+              {t}
+            </span>
+          ))}
+        </div>
+      </div>
     </li>
   );
 }

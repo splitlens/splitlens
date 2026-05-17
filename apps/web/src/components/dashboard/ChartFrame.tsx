@@ -20,13 +20,19 @@ export function ChartFrame({
   useEffect(() => setMounted(true), []);
 
   return (
-    <div className="w-full" style={{ height }}>
+    <div style={{ width: "100%", height, marginTop: 12 }}>
       {mounted ? (
         children
       ) : (
         <div
-          className="h-full w-full animate-pulse rounded-md bg-zinc-100 dark:bg-zinc-800"
           aria-hidden
+          style={{
+            height: "100%",
+            width: "100%",
+            borderRadius: 6,
+            background: "var(--surface-2)",
+            opacity: 0.6,
+          }}
         />
       )}
     </div>

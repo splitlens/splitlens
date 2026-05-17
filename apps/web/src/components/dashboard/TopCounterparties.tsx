@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import type { TopCounterparty } from "@/lib/repo";
 import { fmtInr, fmtDate } from "@/lib/format";
 
@@ -9,7 +11,12 @@ import { fmtInr, fmtDate } from "@/lib/format";
  */
 export function TopCounterparties({ rows }: { rows: TopCounterparty[] }) {
   if (rows.length === 0) {
-    return <EmptyCard title="Top counterparties" hint="No counterparty data yet." />;
+    return (
+      <EmptyCard
+        title="Top counterparties"
+        hint="No counterparty data yet."
+      />
+    );
   }
 
   const maxSpend = rows.reduce(
@@ -18,45 +25,104 @@ export function TopCounterparties({ rows }: { rows: TopCounterparty[] }) {
   );
 
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 p-5 shadow-sm">
+    <div className="surface" style={{ padding: 20 }}>
       <div className="flex items-baseline justify-between">
-        <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Top counterparties</h3>
-        <span className="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">cleaned names from PhonePe / GPay</span>
+        <div className="flex flex-col gap-1">
+          <span className="eyebrow">Top counterparties</span>
+          <h3 className="h2">Who you pay the most</h3>
+        </div>
+        <span className="tiny muted">click a row to see all charges</span>
       </div>
-      <div className="mt-3 divide-y divide-zinc-100 dark:divide-zinc-800">
-        {rows.map((r) => {
+      <div className="flex flex-col" style={{ marginTop: 12 }}>
+        {rows.map((r, idx) => {
           const total = r.totalOut + r.totalIn;
           const widthPct = Math.max(2, (total / maxSpend) * 100);
+          // /review filters its txn list via the `q` free-text search
+          // param, which scans counterparty + narration. For well-named
+          // merchants this is effectively an exact-counterparty filter;
+          // for short generic names it can over-match a little but the
+          // user lands on a useful filtered view either way.
+          const href = `/review?q=${encodeURIComponent(r.counterparty)}`;
           return (
-            <div key={r.counterparty} className="py-2.5">
+            <Link
+              key={r.counterparty}
+              href={href}
+              className="flex flex-col"
+              aria-label={`Show all transactions with ${r.counterparty}`}
+              style={{
+                padding: "10px 8px",
+                margin: "0 -8px",
+                gap: 6,
+                borderTop:
+                  idx === 0
+                    ? "none"
+                    : "1px dashed var(--border-dashed)",
+                borderRadius: 6,
+                textDecoration: "none",
+                color: "inherit",
+                transition: "background 0.12s ease",
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLElement).style.background =
+                  "var(--surface-2)";
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLElement).style.background = "";
+              }}
+            >
               <div className="flex items-baseline justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-2">
                   <span
-                    className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-50"
                     title={r.counterparty}
+                    style={{
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      fontSize: 14,
+                      color: "var(--fg)",
+                      fontWeight: 500,
+                    }}
                   >
                     {r.counterparty}
                   </span>
                   <KindBadge kind={r.counterpartyKind} />
                 </div>
-                <span className="shrink-0 text-sm font-medium tabular-nums text-zinc-900 dark:text-zinc-50">
+                <span
+                  className="num-amount"
+                  style={{ fontSize: 14, flexShrink: 0 }}
+                >
                   {fmtInr(total)}
                 </span>
               </div>
-              <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+              <div
+                style={{
+                  height: 4,
+                  width: "100%",
+                  overflow: "hidden",
+                  borderRadius: 999,
+                  background: "var(--surface-2)",
+                }}
+              >
                 <div
-                  className="h-full rounded-full bg-indigo-500"
-                  style={{ width: `${widthPct}%` }}
+                  style={{
+                    height: "100%",
+                    width: `${widthPct}%`,
+                    background: "var(--accent)",
+                    borderRadius: 999,
+                  }}
                 />
               </div>
-              <div className="mt-1 flex items-center gap-3 text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">
+              <div
+                className="flex items-center gap-2 tiny"
+                style={{ color: "var(--muted)" }}
+              >
                 <span>{r.txnCount} txns</span>
-                <span>·</span>
+                <span className="muted-2">·</span>
                 <span>
                   {fmtDate(r.firstSeen)} → {fmtDate(r.lastSeen)}
                 </span>
               </div>
-            </div>
+            </Link>
           );
         })}
       </div>
@@ -68,7 +134,13 @@ export function KindBadge({ kind }: { kind: string }) {
   const style = KIND_STYLE[kind] ?? KIND_STYLE.unknown!;
   return (
     <span
-      className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide ${style.cls}`}
+      className="tag mono"
+      style={{
+        fontSize: 9.5,
+        letterSpacing: "0.08em",
+        textTransform: "uppercase",
+        color: style.color,
+      }}
       title={style.title}
     >
       {style.label}
@@ -76,39 +148,44 @@ export function KindBadge({ kind }: { kind: string }) {
   );
 }
 
-const KIND_STYLE: Record<string, { label: string; cls: string; title: string }> = {
+const KIND_STYLE: Record<
+  string,
+  { label: string; color: string; title: string }
+> = {
   named: {
     label: "named",
-    cls: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200",
+    color: "var(--credit)",
     title: "Counterparty is a person or branded merchant.",
   },
   vpa: {
     label: "VPA",
-    cls: "bg-sky-50 text-sky-700 ring-1 ring-sky-200",
+    color: "var(--accent)",
     title: "Counterparty was given as a UPI handle (e.g. merchant@axisbank).",
   },
   bill: {
     label: "bill",
-    cls: "bg-amber-50 text-amber-700 ring-1 ring-amber-200",
+    color: "var(--warn)",
     title: "Bill payment (e.g. FASTag, electricity).",
   },
   self_transfer: {
     label: "self",
-    cls: "bg-violet-50 text-violet-700 ring-1 ring-violet-200",
+    color: "var(--muted)",
     title: "Moving money between your own accounts.",
   },
   unknown: {
     label: "?",
-    cls: "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 ring-1 ring-zinc-200",
+    color: "var(--muted-2)",
     title: "Bank-only row — counterparty couldn't be classified.",
   },
 };
 
 function EmptyCard({ title, hint }: { title: string; hint: string }) {
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 p-5 shadow-sm">
-      <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">{title}</h3>
-      <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">{hint}</p>
+    <div className="surface" style={{ padding: 20 }}>
+      <span className="eyebrow">{title}</span>
+      <p className="small" style={{ marginTop: 8 }}>
+        {hint}
+      </p>
     </div>
   );
 }

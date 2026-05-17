@@ -10,6 +10,9 @@ import { DayDetailModal } from "./DayDetailModal";
  * GitHub-contributions-style daily calendar: 52 (ish) weeks × 7 days. One
  * grid per year, dropdown picks the year. Cell intensity = log-scaled daily
  * spend. Hover reveals exact amount + txn count.
+ *
+ * All cell colors are derived from --accent via color-mix so the calendar
+ * tracks the active palette.
  */
 export function SpendingCalendar({ daily }: { daily: DailySpendPoint[] }) {
   const years = useMemo(() => {
@@ -18,7 +21,9 @@ export function SpendingCalendar({ daily }: { daily: DailySpendPoint[] }) {
     return [...ys].sort((a, b) => b - a);
   }, [daily]);
 
-  const [year, setYear] = useState<number>(() => years[0] ?? new Date().getFullYear());
+  const [year, setYear] = useState<number>(
+    () => years[0] ?? new Date().getFullYear(),
+  );
 
   const byDate = useMemo(() => {
     const m = new Map<string, DailySpendPoint>();
@@ -26,10 +31,17 @@ export function SpendingCalendar({ daily }: { daily: DailySpendPoint[] }) {
     return m;
   }, [daily]);
 
-  const cells = useMemo(() => buildYearGrid(year, byDate), [year, byDate]);
+  const cells = useMemo(
+    () => buildYearGrid(year, byDate),
+    [year, byDate],
+  );
 
   const maxSpend = useMemo(
-    () => cells.reduce((m, c) => (c.point && c.point.totalOut > m ? c.point.totalOut : m), 1),
+    () =>
+      cells.reduce(
+        (m, c) => (c.point && c.point.totalOut > m ? c.point.totalOut : m),
+        1,
+      ),
     [cells],
   );
 
@@ -54,15 +66,27 @@ export function SpendingCalendar({ daily }: { daily: DailySpendPoint[] }) {
   }
 
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 p-5 shadow-sm">
+    <div className="surface" style={{ padding: 20 }}>
       <div className="flex items-baseline justify-between gap-4">
-        <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-          Spending calendar — {fmtInr(yearTotal)} across {daysSpent} days in {year}
-        </h3>
+        <div className="flex flex-col gap-1">
+          <span className="eyebrow">Spending calendar</span>
+          <h3 className="h2">
+            <span className="num-amount">{fmtInr(yearTotal)}</span>{" "}
+            <span className="muted">
+              across {daysSpent} days in {year}
+            </span>
+          </h3>
+        </div>
         <select
           value={year}
           onChange={(e) => setYear(parseInt(e.target.value, 10))}
-          className="rounded-md border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 px-2 py-1 text-xs text-zinc-700 dark:text-zinc-300"
+          className="chip chip-sm"
+          style={{
+            cursor: "pointer",
+            background: "var(--surface)",
+            color: "var(--fg)",
+            fontFamily: "inherit",
+          }}
         >
           {years.map((y) => (
             <option key={y} value={y}>
@@ -72,21 +96,35 @@ export function SpendingCalendar({ daily }: { daily: DailySpendPoint[] }) {
         </select>
       </div>
 
-      <div className="mt-4 overflow-x-auto">
-        <CalendarSvg cells={cells} maxSpend={maxSpend} year={year} onCellClick={handleDayClick} />
+      <div style={{ marginTop: 16, overflowX: "auto" }}>
+        <CalendarSvg
+          cells={cells}
+          maxSpend={maxSpend}
+          year={year}
+          onCellClick={handleDayClick}
+        />
       </div>
 
-      <div className="mt-3 flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">
+      <div
+        className="flex items-center gap-2 tiny"
+        style={{ marginTop: 12, color: "var(--muted)" }}
+      >
         <span>less</span>
         {INTENSITY_BUCKETS.map((b, i) => (
           <span
             key={i}
-            className="inline-block h-3 w-3 rounded-sm border border-zinc-100 dark:border-zinc-800"
-            style={{ backgroundColor: b.colour }}
+            style={{
+              display: "inline-block",
+              height: 12,
+              width: 12,
+              borderRadius: 2,
+              background: b.colour,
+              border: "1px solid var(--border)",
+            }}
           />
         ))}
         <span>more</span>
-        <span className="ml-auto text-[10px] text-zinc-400 dark:text-zinc-500">
+        <span style={{ marginLeft: "auto" }} className="muted-2">
           click any day for details
         </span>
       </div>
@@ -110,7 +148,10 @@ interface Cell {
   point?: DailySpendPoint;
 }
 
-function buildYearGrid(year: number, byDate: Map<string, DailySpendPoint>): Cell[] {
+function buildYearGrid(
+  year: number,
+  byDate: Map<string, DailySpendPoint>,
+): Cell[] {
   const cells: Cell[] = [];
   const start = new Date(Date.UTC(year, 0, 1));
   const end = new Date(Date.UTC(year, 11, 31));
@@ -165,7 +206,7 @@ function CalendarSvg({
       monthMarkers.push({ month: months[m - 1]!, weekIdx: c.weekIdx });
     }
   }
-  void year; // referenced only via callers
+  void year;
 
   return (
     <svg width={width} height={height} role="img">
@@ -176,8 +217,8 @@ function CalendarSvg({
           x={LEFT_PAD + mm.weekIdx * (CELL + CELL_GAP)}
           y={TOP_PAD - 6}
           fontSize="10"
-          fill="var(--svg-label)"
-          fontFamily="ui-sans-serif, system-ui"
+          fill="var(--muted)"
+          fontFamily="var(--font-mono)"
         >
           {mm.month}
         </text>
@@ -190,8 +231,8 @@ function CalendarSvg({
           y={TOP_PAD + (i * 2 + 1) * (CELL + CELL_GAP) + 9}
           textAnchor="end"
           fontSize="9"
-          fill="var(--svg-label)"
-          fontFamily="ui-sans-serif, system-ui"
+          fill="var(--muted)"
+          fontFamily="var(--font-mono)"
         >
           {d}
         </text>
@@ -214,8 +255,11 @@ function CalendarSvg({
               height={CELL}
               rx={2}
               fill={fill}
-              stroke="var(--cell-empty-stroke)"
-              style={{ cursor: c.point && c.point.totalOut > 0 ? "pointer" : "default" }}
+              stroke="var(--border)"
+              style={{
+                cursor:
+                  c.point && c.point.totalOut > 0 ? "pointer" : "default",
+              }}
               onClick={() => {
                 if (c.point && c.point.totalOut > 0) onCellClick(c.date);
               }}
@@ -229,18 +273,27 @@ function CalendarSvg({
 }
 
 const INTENSITY_BUCKETS = [
-  // The two lightest bands use CSS variables so they flip with the OS theme.
-  { threshold: 0, colour: "var(--cell-empty)" },
-  { threshold: 0.05, colour: "var(--cell-low)" },
-  { threshold: 0.2, colour: "#93c5fd" }, // blue-300
-  { threshold: 0.4, colour: "#3b82f6" }, // blue-500
-  { threshold: 0.7, colour: "#1d4ed8" }, // blue-700
+  { threshold: 0, colour: "var(--surface-2)" },
+  { threshold: 0.05, colour: "var(--accent-soft)" },
+  {
+    threshold: 0.2,
+    colour: "color-mix(in srgb, var(--accent) 22%, var(--surface) 78%)",
+  },
+  {
+    threshold: 0.4,
+    colour: "color-mix(in srgb, var(--accent) 50%, var(--surface) 50%)",
+  },
+  {
+    threshold: 0.7,
+    colour: "color-mix(in srgb, var(--accent) 80%, var(--surface) 20%)",
+  },
 ];
 
 function colourForIntensity(intensity: number): string {
   if (intensity === 0) return INTENSITY_BUCKETS[0]!.colour;
   for (let i = INTENSITY_BUCKETS.length - 1; i >= 0; i--) {
-    if (intensity >= INTENSITY_BUCKETS[i]!.threshold) return INTENSITY_BUCKETS[i]!.colour;
+    if (intensity >= INTENSITY_BUCKETS[i]!.threshold)
+      return INTENSITY_BUCKETS[i]!.colour;
   }
   return INTENSITY_BUCKETS[0]!.colour;
 }

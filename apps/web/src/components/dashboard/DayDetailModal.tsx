@@ -4,6 +4,8 @@ import { useEffect } from "react";
 import type { DrillDownTxn, ItemEnrichment } from "@/lib/repo";
 import { fmtDate, fmtInr } from "@/lib/format";
 import { KindBadge } from "./TopCounterparties";
+import { Ico, type IcoName } from "@/components/Ico";
+import { getCategory } from "@/lib/taxonomy";
 
 /**
  * Modal that lists every transaction on a given date. Opened by clicking a
@@ -35,21 +37,45 @@ export function DayDetailModal({
 
   return (
     <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-zinc-950/40 px-4 backdrop-blur-sm"
       onClick={onClose}
       aria-modal="true"
       role="dialog"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 40,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+        background: "color-mix(in srgb, var(--bg) 70%, transparent)",
+        backdropFilter: "blur(6px)",
+      }}
     >
       <div
-        className="max-h-[85vh] w-full max-w-2xl overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-900"
+        className="surface"
         onClick={(e) => e.stopPropagation()}
+        style={{
+          maxHeight: "85vh",
+          width: "100%",
+          maxWidth: 720,
+          overflow: "hidden",
+          boxShadow: "0 18px 60px rgba(0, 0, 0, 0.45)",
+          display: "flex",
+          flexDirection: "column",
+        }}
       >
-        <header className="flex items-baseline justify-between border-b border-zinc-100 px-5 py-3 dark:border-zinc-800">
-          <div>
-            <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">
-              {fmtDate(date)}
-            </h3>
-            <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+        <header
+          className="flex items-baseline justify-between"
+          style={{
+            padding: "14px 20px",
+            borderBottom: "1px solid var(--border)",
+          }}
+        >
+          <div className="flex flex-col gap-1">
+            <span className="eyebrow">Day detail</span>
+            <h3 className="h2">{fmtDate(date)}</h3>
+            <p className="tiny" style={{ marginTop: 2 }}>
               {loading
                 ? "Loading…"
                 : `${txns.length} transaction${txns.length === 1 ? "" : "s"}${totalOut > 0 ? ` · ${fmtInr(totalOut)} out` : ""}${totalIn > 0 ? ` · ${fmtInr(totalIn)} in` : ""}`}
@@ -58,69 +84,102 @@ export function DayDetailModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
+            className="btn btn-sm ghost"
             aria-label="Close"
+            style={{ padding: "6px 8px" }}
           >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M18 6 6 18" /><path d="m6 6 12 12" />
-            </svg>
+            <Ico name="x" size={16} />
           </button>
         </header>
 
-        <div className="max-h-[70vh] overflow-y-auto">
+        <div style={{ maxHeight: "70vh", overflowY: "auto" }}>
           {loading ? (
-            <div className="px-5 py-8 text-center text-sm text-zinc-500 dark:text-zinc-400">
+            <div
+              className="flex items-center justify-center small muted"
+              style={{ padding: 32 }}
+            >
               Loading transactions…
             </div>
           ) : txns.length === 0 ? (
-            <div className="px-5 py-8 text-center text-sm text-zinc-500 dark:text-zinc-400">
+            <div
+              className="flex items-center justify-center small muted"
+              style={{ padding: 32 }}
+            >
               No transactions on this day.
             </div>
           ) : (
-            <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
+            <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
               {txns.map((t) => {
                 const label = t.counterparty || t.narration || "—";
                 const accountLabel = `${t.accountBank} ${t.accountType === "credit_card" ? "CC" : "Savings"} XX${t.accountLast4}`;
+                const def = getCategory(t.category);
                 return (
-                  <li key={t.id} className="px-5 py-3">
+                  <li
+                    key={t.id}
+                    style={{
+                      padding: "12px 20px",
+                      borderTop: "1px dashed var(--border-dashed)",
+                    }}
+                  >
                     <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1">
+                      <div className="flex flex-col" style={{ flex: 1, minWidth: 0, gap: 4 }}>
                         <div className="flex items-center gap-2">
-                          <span className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-50" title={label}>
+                          <span
+                            title={label}
+                            className="truncate"
+                            style={{
+                              fontSize: 14,
+                              fontWeight: 500,
+                              color: "var(--fg)",
+                            }}
+                          >
                             {label}
                           </span>
-                          {t.counterpartyKind && <KindBadge kind={t.counterpartyKind} />}
+                          {t.counterpartyKind && (
+                            <KindBadge kind={t.counterpartyKind} />
+                          )}
                         </div>
-                        <div className="mt-0.5 flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
-                          {t.txnTime && <span className="tabular-nums">{t.txnTime}</span>}
-                          {t.txnTime && <span>·</span>}
+                        <div
+                          className="flex items-center gap-2 tiny"
+                          style={{ color: "var(--muted)" }}
+                        >
+                          {t.txnTime && (
+                            <span className="mono tabular">{t.txnTime}</span>
+                          )}
+                          {t.txnTime && <span className="muted-2">·</span>}
                           <span>{accountLabel}</span>
                           {t.category && (
                             <>
-                              <span>·</span>
-                              <span className="rounded-full bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800">
+                              <span className="muted-2">·</span>
+                              <span className="chip chip-sm">
+                                <span aria-hidden>{def.emoji}</span>
                                 {t.category}
                               </span>
                             </>
                           )}
                         </div>
-                        {t.counterparty && t.narration && t.counterparty !== t.narration && (
-                          <div className="mt-1 truncate text-xs text-zinc-500 dark:text-zinc-500" title={t.narration}>
-                            {t.narration}
-                          </div>
-                        )}
+                        {t.counterparty &&
+                          t.narration &&
+                          t.counterparty !== t.narration && (
+                            <div
+                              className="tiny truncate"
+                              title={t.narration}
+                            >
+                              {t.narration}
+                            </div>
+                          )}
                         {t.items && t.items.items.length > 0 && (
                           <ItemList items={t.items} />
                         )}
                       </div>
-                      <div className="shrink-0 text-right">
+                      <div className="flex flex-col items-end" style={{ flexShrink: 0 }}>
                         {t.withdrawal != null && (
-                          <div className="text-sm font-medium tabular-nums text-rose-700 dark:text-rose-400">
+                          <div className="num-amount debit" style={{ fontSize: 14 }}>
                             −{fmtInr(t.withdrawal)}
                           </div>
                         )}
                         {t.deposit != null && (
-                          <div className="text-sm font-medium tabular-nums text-emerald-700 dark:text-emerald-400">
+                          <div className="num-amount credit" style={{ fontSize: 14 }}>
                             +{fmtInr(t.deposit)}
                           </div>
                         )}
@@ -148,29 +207,29 @@ function ItemList({ items }: { items: ItemEnrichment }) {
   const MAX = 6;
   const head = items.items.slice(0, MAX);
   const extra = items.items.length - head.length;
-  const iconForKind = (kind: string): string => {
-    if (kind === "instamart") return "🛒";
-    if (kind === "zomato_dining") return "🍽️";
-    if (kind === "zomato_delivery") return "🛵";
-    return "🍔";
+  const iconFor = (kind: string): IcoName => {
+    if (kind === "instamart") return "inbox";
+    return "book";
   };
   return (
-    <div className="mt-1.5 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-xs text-zinc-600 dark:text-zinc-400">
-      <span className="text-[11px]">{iconForKind(items.kind)}</span>
+    <div
+      className="flex flex-wrap items-baseline tiny"
+      style={{ marginTop: 4, columnGap: 6, rowGap: 2, color: "var(--muted)" }}
+    >
+      <Ico name={iconFor(items.kind)} size={13} className="muted-2" />
       {items.restaurant && (
-        <span className="font-medium text-zinc-700 dark:text-zinc-300">
+        <span className="fg-2" style={{ fontWeight: 500 }}>
           {items.restaurant.split(",")[0]}
         </span>
       )}
       {head.map((it, i) => (
-        <span key={`${it.name}-${i}`} className="whitespace-nowrap">
-          {i === 0 && !items.restaurant ? "" : "·"}{" "}
-          {it.name}
+        <span key={`${it.name}-${i}`} style={{ whiteSpace: "nowrap" }}>
+          {i === 0 && !items.restaurant ? "" : "·"} {it.name}
           {it.qty > 1 ? ` ×${it.qty}` : ""}
         </span>
       ))}
       {extra > 0 && (
-        <span className="italic text-zinc-500 dark:text-zinc-500">
+        <span className="muted-2" style={{ fontStyle: "italic" }}>
           + {extra} more
         </span>
       )}

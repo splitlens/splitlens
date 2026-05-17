@@ -6,6 +6,7 @@ import type {
   DashboardSummary,
 } from "@/lib/repo";
 import { fmtInr, fmtDate } from "@/lib/format";
+import { Ico } from "@/components/Ico";
 
 /**
  * Derive a handful of plain-English insights from the queried data. Each
@@ -25,15 +26,43 @@ export function InsightCallouts({
   monthly: MonthlySpendPoint[];
   topCounterparties: TopCounterparty[];
 }) {
-  const insights = buildInsights({ summary, heatmap, daily, monthly, topCounterparties });
+  const insights = buildInsights({
+    summary,
+    heatmap,
+    daily,
+    monthly,
+    topCounterparties,
+  });
 
   return (
-    <div className="rounded-xl border border-zinc-200 bg-gradient-to-br from-indigo-50 to-white p-5 shadow-sm dark:border-indigo-900/50 dark:from-indigo-950/40 dark:to-zinc-900">
-      <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Patterns we noticed</h3>
-      <ul className="mt-3 space-y-2.5 text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
+    <div
+      className="surface flex flex-col"
+      style={{
+        padding: 20,
+        background: "var(--accent-soft)",
+        borderColor: "var(--accent-line)",
+        gap: 12,
+      }}
+    >
+      <div className="flex items-center gap-2">
+        <Ico name="sparkles" size={13} className="accent" />
+        <span className="eyebrow eyebrow-accent">Patterns we noticed</span>
+      </div>
+      <ul
+        className="flex flex-col"
+        style={{ gap: 10, padding: 0, listStyle: "none", margin: 0 }}
+      >
         {insights.map((i, idx) => (
-          <li key={idx} className="flex gap-2">
-            <span className="mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-indigo-500" />
+          <li
+            key={idx}
+            className="flex gap-2"
+            style={{ fontSize: 13.5, lineHeight: 1.55, color: "var(--fg-2)" }}
+          >
+            <span
+              className="dot accent"
+              style={{ marginTop: 7, flexShrink: 0 }}
+              aria-hidden
+            />
             <span dangerouslySetInnerHTML={{ __html: i }} />
           </li>
         ))}
@@ -42,7 +71,10 @@ export function InsightCallouts({
   );
 }
 
-const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const DAY_NAMES = [
+  "Sunday", "Monday", "Tuesday", "Wednesday",
+  "Thursday", "Friday", "Saturday",
+];
 
 function buildInsights(args: {
   summary: DashboardSummary;
@@ -57,12 +89,16 @@ function buildInsights(args: {
   // 1. Busiest weekday × time-of-day band
   if (heatmap.length > 0) {
     const byDow: Record<number, number> = {};
-    for (const c of heatmap) byDow[c.dayOfWeek] = (byDow[c.dayOfWeek] ?? 0) + c.totalSpend;
+    for (const c of heatmap)
+      byDow[c.dayOfWeek] = (byDow[c.dayOfWeek] ?? 0) + c.totalSpend;
     const [topDow] = Object.entries(byDow).sort((a, b) => b[1] - a[1])[0]!;
 
     // Late evening band on that day
     const lateBand = heatmap
-      .filter((c) => c.dayOfWeek === Number(topDow) && c.hour >= 18 && c.hour <= 22)
+      .filter(
+        (c) =>
+          c.dayOfWeek === Number(topDow) && c.hour >= 18 && c.hour <= 22,
+      )
       .reduce((s, c) => s + c.totalSpend, 0);
     const earlyBand = heatmap
       .filter((c) => c.dayOfWeek === Number(topDow) && c.hour < 12)
@@ -88,8 +124,10 @@ function buildInsights(args: {
 
   // 3. Lifestyle trend: compare last 6 months vs preceding 6 months
   if (monthly.length >= 12) {
-    const last6 = monthly.slice(-6).reduce((s, m) => s + m.totalOut, 0) / 6;
-    const prior6 = monthly.slice(-12, -6).reduce((s, m) => s + m.totalOut, 0) / 6;
+    const last6 =
+      monthly.slice(-6).reduce((s, m) => s + m.totalOut, 0) / 6;
+    const prior6 =
+      monthly.slice(-12, -6).reduce((s, m) => s + m.totalOut, 0) / 6;
     if (prior6 > 0) {
       const deltaPct = ((last6 - prior6) / prior6) * 100;
       if (Math.abs(deltaPct) >= 8) {
@@ -103,14 +141,19 @@ function buildInsights(args: {
 
   // 4. Big single-day spike
   if (daily.length > 0) {
-    const biggest = daily.reduce((m, d) => (d.totalOut > m.totalOut ? d : m), daily[0]!);
+    const biggest = daily.reduce(
+      (m, d) => (d.totalOut > m.totalOut ? d : m),
+      daily[0]!,
+    );
     out.push(
       `Your biggest single day was <strong>${fmtDate(biggest.txnDate)}</strong> — ${fmtInr(biggest.totalOut)} across ${biggest.txnCount} transactions.`,
     );
   }
 
   // 5. The counterparty you transact with most often
-  const mostFrequent = [...topCounterparties].sort((a, b) => b.txnCount - a.txnCount)[0];
+  const mostFrequent = [...topCounterparties].sort(
+    (a, b) => b.txnCount - a.txnCount,
+  )[0];
   if (mostFrequent && mostFrequent.txnCount >= 5) {
     out.push(
       `Most frequent counterparty: <strong>${escapeHtml(mostFrequent.counterparty)}</strong> — ${mostFrequent.txnCount} transactions totalling ${fmtInr(mostFrequent.totalOut + mostFrequent.totalIn)}.`,

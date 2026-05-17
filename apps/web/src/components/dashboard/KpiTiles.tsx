@@ -7,6 +7,7 @@ interface Tile {
   label: string;
   value: string;
   sub?: string;
+  cls?: string;
 }
 
 export function KpiTiles({
@@ -36,13 +37,16 @@ export function KpiTiles({
 
   // Coverage = fraction of canonical txns we got wall-clock time for.
   const timeCoverage =
-    summary.txnCount > 0 ? Math.round((100 * summary.txnsWithTime) / summary.txnCount) : 0;
+    summary.txnCount > 0
+      ? Math.round((100 * summary.txnsWithTime) / summary.txnCount)
+      : 0;
 
   const tiles: Tile[] = [
     {
       label: "Total outflow",
       value: fmtInr(summary.totalOut),
       sub: months > 0 ? `${months} months tracked` : undefined,
+      cls: "debit",
     },
     {
       label: "Avg / month",
@@ -59,35 +63,43 @@ export function KpiTiles({
     },
     {
       label: "Busiest hour",
-      value: busiest ? `${DAY_NAMES[busiest.dayOfWeek]} ${pad(busiest.hour)}:00` : "—",
+      value: busiest
+        ? `${DAY_NAMES[busiest.dayOfWeek]} ${pad(busiest.hour)}:00`
+        : "—",
       sub: busiest ? `${fmtInr(busiest.totalSpend)} cumulative` : undefined,
     },
     {
       label: "Biggest single day",
       value: biggestDay ? fmtInr(biggestDay.totalOut) : "—",
       sub: biggestDay ? fmtDate(biggestDay.txnDate) : undefined,
+      cls: "debit",
     },
     {
-      label: "Autopay links found",
+      label: "Autopay links",
       value: summary.autopayPairs.toString(),
       sub: "savings ↔ credit card",
     },
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(6, minmax(0, 1fr))",
+        gap: 12,
+      }}
+    >
       {tiles.map((t) => (
         <div
           key={t.label}
-          className="rounded-xl border border-zinc-200 bg-white px-4 py-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-900"
+          className="surface flex flex-col"
+          style={{ padding: "14px 16px", gap: 6, minHeight: 96 }}
         >
-          <div className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-            {t.label}
-          </div>
-          <div className="mt-1 text-2xl font-semibold tabular-nums text-zinc-900 dark:text-zinc-50">
+          <span className="eyebrow">{t.label}</span>
+          <div className={`num-amount ${t.cls ?? ""}`} style={{ fontSize: 22 }}>
             {t.value}
           </div>
-          {t.sub && <div className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-500">{t.sub}</div>}
+          {t.sub && <span className="tiny">{t.sub}</span>}
         </div>
       ))}
     </div>
@@ -101,7 +113,10 @@ function pad(n: number) {
 function shortDate(iso: string): string {
   const d = new Date(iso + "T00:00:00");
   if (Number.isNaN(d.getTime())) return iso;
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const months = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+  ];
   return `${months[d.getMonth()]} ${d.getFullYear().toString().slice(2)}`;
 }
 

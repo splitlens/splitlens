@@ -52,6 +52,10 @@ describe("openDb / defaultDbPath", () => {
     db2.$client.close();
     expect(tables).toEqual([
       "accounts",
+      "custom_categories",
+      "location_imports",
+      "location_records",
+      "merchant_labels",
       "people",
       "rules",
       "statements",

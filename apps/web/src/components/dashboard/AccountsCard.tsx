@@ -3,41 +3,96 @@ import { fmtInr } from "@/lib/format";
 
 export function AccountsCard({ accounts }: { accounts: AccountSummary[] }) {
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 p-5 shadow-sm">
-      <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Accounts</h3>
+    <div className="surface" style={{ padding: 20 }}>
+      <div className="flex flex-col gap-1" style={{ marginBottom: 12 }}>
+        <span className="eyebrow">Accounts</span>
+        <h3 className="h2">Across {accounts.length} ledger{accounts.length === 1 ? "" : "s"}</h3>
+      </div>
       {accounts.length === 0 ? (
-        <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">No accounts yet.</p>
+        <p className="small">No accounts yet.</p>
       ) : (
-        <table className="mt-3 w-full text-sm">
+        <table className="w-full" style={{ fontSize: 13.5 }}>
           <thead>
-            <tr className="text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">
-              <th className="pb-2">Account</th>
-              <th className="pb-2 text-right">Txns</th>
-              <th className="pb-2 text-right">Out</th>
-              <th className="pb-2 text-right">In</th>
-              <th className="pb-2 text-right">Net</th>
+            <tr>
+              <th
+                className="eyebrow"
+                style={{ textAlign: "left", paddingBottom: 8 }}
+              >
+                Account
+              </th>
+              <th
+                className="eyebrow"
+                style={{ textAlign: "right", paddingBottom: 8 }}
+              >
+                Txns
+              </th>
+              <th
+                className="eyebrow"
+                style={{ textAlign: "right", paddingBottom: 8 }}
+              >
+                Out
+              </th>
+              <th
+                className="eyebrow"
+                style={{ textAlign: "right", paddingBottom: 8 }}
+              >
+                In
+              </th>
+              <th
+                className="eyebrow"
+                style={{ textAlign: "right", paddingBottom: 8 }}
+              >
+                Net
+              </th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+          <tbody>
             {accounts.map((a) => (
-              <tr key={a.id}>
-                <td className="py-2">
-                  <div className="font-medium text-zinc-900 dark:text-zinc-50">
+              <tr
+                key={a.id}
+                style={{ borderTop: "1px dashed var(--border-dashed)" }}
+              >
+                <td style={{ padding: "10px 0", verticalAlign: "top" }}>
+                  <div
+                    style={{
+                      fontSize: 14,
+                      color: "var(--fg)",
+                      fontWeight: 500,
+                    }}
+                  >
                     {a.bank} {a.type === "credit_card" ? "CC" : "Savings"}
                   </div>
-                  <div className="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">
+                  <div className="tiny" style={{ marginTop: 2 }}>
                     XX{a.last4}
                     {a.customerName ? ` · ${a.customerName}` : ""}
                   </div>
                 </td>
-                <td className="py-2 text-right tabular-nums">{a.txnCount}</td>
-                <td className="py-2 text-right tabular-nums text-rose-700">
+                <td
+                  className="num-amount"
+                  style={{
+                    textAlign: "right",
+                    padding: "10px 0",
+                    fontSize: 13,
+                  }}
+                >
+                  {a.txnCount}
+                </td>
+                <td
+                  className="num-amount debit"
+                  style={{ textAlign: "right", padding: "10px 0" }}
+                >
                   {fmtInr(a.totalOut)}
                 </td>
-                <td className="py-2 text-right tabular-nums text-emerald-700">
+                <td
+                  className="num-amount credit"
+                  style={{ textAlign: "right", padding: "10px 0" }}
+                >
                   {fmtInr(a.totalIn)}
                 </td>
-                <td className="py-2 text-right tabular-nums font-medium">
+                <td
+                  className="num-amount"
+                  style={{ textAlign: "right", padding: "10px 0" }}
+                >
                   {fmtInr(a.net)}
                 </td>
               </tr>

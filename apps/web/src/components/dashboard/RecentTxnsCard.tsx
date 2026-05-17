@@ -4,6 +4,7 @@ import { KindBadge } from "./TopCounterparties";
 import { ShareTxnButton } from "@/components/friends/ShareTxnButton";
 import { FindEmailsButton } from "@/components/friends/FindEmailsButton";
 import type { PersonOption } from "@/components/friends/ShareTxnModal";
+import { getCategory } from "@/lib/taxonomy";
 
 /**
  * The last N transactions. Prefers the clean `counterparty` over raw bank
@@ -20,81 +21,172 @@ export function RecentTxnsCard({
 }) {
   if (txns.length === 0) {
     return (
-      <div className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 p-5 shadow-sm">
-        <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Recent transactions</h3>
-        <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">No transactions yet.</p>
+      <div className="surface" style={{ padding: 20 }}>
+        <span className="eyebrow">Recent transactions</span>
+        <p className="small" style={{ marginTop: 8 }}>
+          No transactions yet.
+        </p>
       </div>
     );
   }
 
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 p-5 shadow-sm">
+    <div className="surface" style={{ padding: 20 }}>
       <div className="flex items-baseline justify-between">
-        <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Recent transactions</h3>
-        <span className="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">last {txns.length}</span>
+        <div className="flex flex-col gap-1">
+          <span className="eyebrow">Recent transactions</span>
+          <h3 className="h2">The last {txns.length}, freshest first</h3>
+        </div>
+        <span className="tag mono">last {txns.length}</span>
       </div>
-      <div className="mt-3 overflow-x-auto">
-        <table className="w-full text-sm">
+      <div style={{ marginTop: 12, overflowX: "auto" }}>
+        <table className="w-full" style={{ fontSize: 13.5 }}>
           <thead>
-            <tr className="text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">
-              <th className="pb-2">Date</th>
-              <th className="pb-2">Counterparty / narration</th>
-              <th className="pb-2">Category</th>
-              <th className="pb-2 text-right">Out</th>
-              <th className="pb-2 text-right">In</th>
-              <th className="pb-2 text-right"></th>
+            <tr>
+              <th
+                className="eyebrow"
+                style={{ textAlign: "left", paddingBottom: 8 }}
+              >
+                Date
+              </th>
+              <th
+                className="eyebrow"
+                style={{ textAlign: "left", paddingBottom: 8 }}
+              >
+                Counterparty / narration
+              </th>
+              <th
+                className="eyebrow"
+                style={{ textAlign: "left", paddingBottom: 8 }}
+              >
+                Category
+              </th>
+              <th
+                className="eyebrow"
+                style={{ textAlign: "right", paddingBottom: 8 }}
+              >
+                Out
+              </th>
+              <th
+                className="eyebrow"
+                style={{ textAlign: "right", paddingBottom: 8 }}
+              >
+                In
+              </th>
+              <th
+                className="eyebrow"
+                style={{ textAlign: "right", paddingBottom: 8 }}
+              />
             </tr>
           </thead>
-          <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+          <tbody>
             {txns.map((t) => {
               const label = t.counterparty || t.narration || "—";
               const isShort = label.length <= 60;
+              const def = getCategory(t.category);
               return (
-                <tr key={t.id}>
-                  <td className="whitespace-nowrap py-2 align-top text-zinc-700 dark:text-zinc-300">
+                <tr
+                  key={t.id}
+                  style={{
+                    borderTop: "1px dashed var(--border-dashed)",
+                  }}
+                >
+                  <td
+                    style={{
+                      whiteSpace: "nowrap",
+                      padding: "10px 0",
+                      verticalAlign: "top",
+                      color: "var(--fg-2)",
+                    }}
+                  >
                     <div>{fmtDate(t.txnDate)}</div>
                     {t.txnTime && (
-                      <div className="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500 tabular-nums">{t.txnTime}</div>
-                    )}
-                  </td>
-                  <td className="py-2 align-top">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`min-w-0 ${isShort ? "" : "max-w-[36rem] truncate"} font-medium text-zinc-900 dark:text-zinc-50`}
-                        title={label}
+                      <div
+                        className="tiny mono tabular"
+                        style={{ marginTop: 2 }}
                       >
-                        {label}
-                      </span>
-                      {t.counterpartyKind && <KindBadge kind={t.counterpartyKind} />}
-                      {t.sourceCount > 1 && (
-                        <span
-                          className="inline-block h-2 w-2 rounded-full bg-emerald-500"
-                          title={`Enriched by ${t.sourceCount} sources`}
-                        />
-                      )}
-                    </div>
-                    {t.counterparty && t.narration && t.counterparty !== t.narration && (
-                      <div className="mt-0.5 truncate text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500" title={t.narration}>
-                        {t.narration}
+                        {t.txnTime}
                       </div>
                     )}
                   </td>
-                  <td className="py-2 align-top">
+                  <td style={{ padding: "10px 8px 10px 0", verticalAlign: "top" }}>
+                    <div className="flex items-center gap-2">
+                      <span
+                        title={label}
+                        className={
+                          isShort ? undefined : "truncate"
+                        }
+                        style={{
+                          minWidth: 0,
+                          maxWidth: isShort ? undefined : "36rem",
+                          fontSize: 14,
+                          fontWeight: 500,
+                          color: "var(--fg)",
+                        }}
+                      >
+                        {label}
+                      </span>
+                      {t.counterpartyKind && (
+                        <KindBadge kind={t.counterpartyKind} />
+                      )}
+                      {t.sourceCount > 1 && (
+                        <span
+                          className="dot credit"
+                          title={`Enriched by ${t.sourceCount} sources`}
+                          style={{ width: 8, height: 8 }}
+                          aria-hidden
+                        />
+                      )}
+                    </div>
+                    {t.counterparty &&
+                      t.narration &&
+                      t.counterparty !== t.narration && (
+                        <div
+                          className="tiny truncate"
+                          style={{ marginTop: 2 }}
+                          title={t.narration}
+                        >
+                          {t.narration}
+                        </div>
+                      )}
+                  </td>
+                  <td style={{ padding: "10px 0", verticalAlign: "top" }}>
                     {t.category ? (
-                      <span className="rounded-full bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 text-xs text-zinc-700 dark:text-zinc-300">
+                      <span className="chip chip-sm">
+                        <span aria-hidden>{def.emoji}</span>
                         {t.category}
                       </span>
                     ) : (
-                      <span className="text-xs text-zinc-400 dark:text-zinc-500">—</span>
+                      <span className="tiny muted-2">—</span>
                     )}
                   </td>
-                  <td className="py-2 align-top text-right tabular-nums text-rose-700">
+                  <td
+                    className="num-amount debit"
+                    style={{
+                      textAlign: "right",
+                      padding: "10px 0",
+                      verticalAlign: "top",
+                    }}
+                  >
                     {t.withdrawal != null ? fmtInr(t.withdrawal) : ""}
                   </td>
-                  <td className="py-2 align-top text-right tabular-nums text-emerald-700">
+                  <td
+                    className="num-amount credit"
+                    style={{
+                      textAlign: "right",
+                      padding: "10px 0",
+                      verticalAlign: "top",
+                    }}
+                  >
                     {t.deposit != null ? fmtInr(t.deposit) : ""}
                   </td>
-                  <td className="py-2 align-top text-right">
+                  <td
+                    style={{
+                      textAlign: "right",
+                      padding: "10px 0",
+                      verticalAlign: "top",
+                    }}
+                  >
                     <div className="flex items-center justify-end gap-1.5">
                       <FindEmailsButton
                         txnId={t.id}

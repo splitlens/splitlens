@@ -2,6 +2,8 @@
 
 import { useCallback, useRef, useState } from "react";
 
+import { Ico } from "./Ico";
+
 export interface PdfDropzoneProps {
   onFile: (file: File) => void | Promise<void>;
   isProcessing?: boolean;
@@ -64,20 +66,58 @@ export function PdfDropzone({
           void handleFile(e.dataTransfer.files[0]);
         }}
         disabled={isProcessing}
-        className={`flex w-full flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-16 text-center transition-all ${
-          isDragging
-            ? "bg-[color:var(--color-accent)]/10 border-[color:var(--color-accent)]"
-            : "border-[color:var(--color-border)] bg-[color:var(--color-card)]"
-        } ${isProcessing ? "cursor-wait opacity-60" : "hover:border-[color:var(--color-accent)]/60 cursor-pointer"} `}
+        className="surface-dashed flex w-full flex-col items-center justify-center"
+        style={{
+          padding: "56px 24px",
+          textAlign: "center",
+          transition: "background 120ms ease, border-color 120ms ease",
+          cursor: isProcessing ? "wait" : "pointer",
+          opacity: isProcessing ? 0.6 : 1,
+          background: isDragging ? "var(--accent-soft)" : "var(--surface)",
+          borderColor: isDragging ? "var(--accent-line)" : "var(--border-dashed)",
+          color: "var(--fg)",
+          fontFamily: "inherit",
+        }}
         aria-label="Upload PDF"
       >
-        <div className="mb-4 text-5xl">{isProcessing ? "⏳" : isDragging ? "📥" : "📄"}</div>
-        <div className="text-lg font-semibold">{isProcessing ? "Parsing PDF…" : label}</div>
-        <div className="mt-2 max-w-md text-sm text-[color:var(--color-muted)]">{hint}</div>
+        <div
+          className="flex items-center justify-center"
+          style={{
+            width: 56,
+            height: 56,
+            borderRadius: 14,
+            marginBottom: 16,
+            background: isDragging ? "var(--accent-soft)" : "var(--surface-2)",
+            border: `1px solid ${
+              isDragging ? "var(--accent-line)" : "var(--border)"
+            }`,
+            color: isDragging ? "var(--accent)" : "var(--fg-2)",
+          }}
+        >
+          {isProcessing ? (
+            <Ico name="sparkles" size={22} />
+          ) : isDragging ? (
+            <Ico name="corner-down-right" size={22} />
+          ) : (
+            <Ico name="paperclip" size={22} />
+          )}
+        </div>
+
+        <div className="h2" style={{ marginBottom: 6 }}>
+          {isProcessing ? "Parsing PDF…" : label}
+        </div>
+        <div className="small muted" style={{ maxWidth: 460 }}>
+          {hint}
+        </div>
+
         {!isProcessing && (
-          <div className="mt-6 inline-flex rounded-md bg-[color:var(--color-accent)] px-5 py-2 text-sm font-semibold text-[color:var(--color-accent-fg)]">
-            or click to choose a file
-          </div>
+          <span
+            className="btn primary btn-sm"
+            style={{ marginTop: 22, pointerEvents: "none" }}
+            aria-hidden
+          >
+            <Ico name="paperclip" size={13} /> or click to choose a file
+          </span>
         )}
       </button>
 
@@ -92,9 +132,18 @@ export function PdfDropzone({
       {errorMsg && (
         <div
           role="alert"
-          className="border-[color:var(--color-danger)]/40 bg-[color:var(--color-danger)]/10 mt-3 rounded-md border px-4 py-3 text-sm text-[color:var(--color-danger)]"
+          className="flex items-center gap-2 small"
+          style={{
+            marginTop: 12,
+            padding: "10px 14px",
+            borderRadius: 8,
+            border: "1px solid color-mix(in srgb, var(--debit) 40%, transparent)",
+            background: "color-mix(in srgb, var(--debit) 10%, transparent)",
+            color: "var(--debit)",
+          }}
         >
-          ⚠️ {errorMsg}
+          <Ico name="flag" size={13} />
+          <span>{errorMsg}</span>
         </div>
       )}
     </div>
