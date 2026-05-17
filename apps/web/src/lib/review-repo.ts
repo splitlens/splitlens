@@ -1845,6 +1845,141 @@ export async function sweepPendingMerchantRules(): Promise<{
   return { swept: total };
 }
 
+// ============================================================================
+// /review/split — queue rows for the split-focused review surface
+// ============================================================================
+
+/**
+ * One row of the split-review queue. Cluster around what the user
+ * needs to make a split decision quickly:
+ *
+ *   - who paid (always "me" today — txns are debits from my account),
+ *   - to whom (the counterparty, with kind so we know if it's a person),
+ *   - amount and date,
+ *   - which queue reason placed this row here (drives section header
+ *     + the suggested action label),
+ *   - the suggested split (if any) — pre-resolved to the matching
+ *     person display name so the UI doesn't need to look it up,
+ *   - the user-visible recurrence label (so we can hint "monthly").
+ */
+export interface SplitQueueRow {
+  id: number;
+  txnDate: string;
+  txnTime: string | null;
+  amount: number;
+  direction: "debit" | "credit";
+  counterparty: string;
+  counterpartyKind: string | null;
+  personId: string | null;
+  category: string | null;
+  recurrence: string | null;
+  /** Why this row is in the queue. Same row may match multiple
+   *  reasons — we tag the one that's the strongest signal so the
+   *  section header is meaningful. */
+  reason: "person" | "large" | "recurring";
+  /** Display name of the person we'd default the split to. Null when
+   *  no obvious split target exists (e.g. a large Zepto order). */
+  suggestedSplitWith: string | null;
+}
+
+/**
+ * Compose the split-review queue from three independent filters:
+ *
+ *   1. Person-kind un-split            — the canonical split candidate
+ *   2. Large un-reviewed (>= threshold) — anything sizable to check
+ *   3. Recurring monthly w/ a person    — rent/utility-shaped flows
+ *
+ * Each row is tagged with the strongest matching reason for its
+ * section header. Rows that satisfy multiple reasons (e.g. a large
+ * monthly person txn) are de-duped — the priority order is
+ * person > recurring > large so the UI surfaces the most actionable
+ * framing.
+ *
+ * Reviewed=1 rows are excluded throughout. The queue is intentionally
+ * un-paginated for now — local dataset, max a few hundred rows.
+ */
+export async function getSplitQueueRows(
+  largeThreshold: number = 1000,
+): Promise<SplitQueueRow[]> {
+  const db = openDb();
+  // Pull the union once, then categorize in JS. Cheaper than three
+  // round-trips since most predicates hit the same indexed columns.
+  const rows = db.all<{
+    id: number;
+    txn_date: string;
+    txn_time: string | null;
+    withdrawal: number | null;
+    deposit: number | null;
+    counterparty: string;
+    counterparty_kind: string | null;
+    person_id: string | null;
+    category: string | null;
+    recurrence: string | null;
+    share_count: number | null;
+  }>(sql`
+    SELECT id, txn_date, txn_time, withdrawal, deposit,
+           counterparty, counterparty_kind, person_id, category,
+           recurrence, share_count
+    FROM transactions
+    WHERE reviewed = 0
+      AND counterparty IS NOT NULL
+      AND counterparty != ''
+      AND (
+        -- (1) Person-kind un-split
+        (counterparty_kind = 'person' AND (share_count IS NULL OR share_count = 1))
+        -- (2) Large un-reviewed
+        OR (COALESCE(withdrawal, deposit, 0) >= ${largeThreshold})
+        -- (3) Recurring monthly with a person
+        OR (recurrence IN ('monthly', 'weekly', 'quarterly')
+            AND counterparty_kind = 'person')
+      )
+    ORDER BY txn_date DESC, COALESCE(txn_time, '00:00') DESC, id DESC
+  `);
+
+  // Pre-resolve suggested-split target display names. We hit
+  // DEFAULT_PEOPLE in core for the canonical id→name map.
+  const { DEFAULT_PEOPLE } = await import("@splitlens/core");
+  const personIdToName = new Map(
+    DEFAULT_PEOPLE.map((p: { id: string; displayName: string }) => [
+      p.id,
+      p.displayName,
+    ]),
+  );
+
+  return rows.map((r) => {
+    const amount = r.withdrawal ?? r.deposit ?? 0;
+    const direction: "debit" | "credit" = r.withdrawal ? "debit" : "credit";
+    // Priority: person > recurring > large.
+    let reason: SplitQueueRow["reason"] = "large";
+    if (r.counterparty_kind === "person") {
+      reason =
+        r.recurrence === "monthly" ||
+        r.recurrence === "weekly" ||
+        r.recurrence === "quarterly"
+          ? "recurring"
+          : "person";
+    }
+    const suggestedSplitWith =
+      r.person_id && personIdToName.get(r.person_id)
+        ? personIdToName.get(r.person_id)!
+        : null;
+    return {
+      id: r.id,
+      txnDate: r.txn_date,
+      txnTime: r.txn_time,
+      amount,
+      direction,
+      counterparty: r.counterparty,
+      counterpartyKind: r.counterparty_kind,
+      personId: r.person_id,
+      category: r.category,
+      recurrence: r.recurrence,
+      reason,
+      suggestedSplitWith,
+    };
+  });
+}
+
 /**
  * Fetch the active rule state for a counterparty (all three
  * dimensions). Drives the InboxModal's pre-fill of the bulk-apply
