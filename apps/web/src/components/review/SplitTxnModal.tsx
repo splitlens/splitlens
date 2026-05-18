@@ -377,6 +377,16 @@ export function SplitTxnModal({
   const yourShare = perPerson;
   const owedToYou = row.direction === "debit" ? row.amount - yourShare : 0;
 
+  // Sorted contact list (most-frequent first) — surfaced as the
+  // "seed friend" candidate when entering split mode and as the chip
+  // grid inside the SplitPane. Declared up top so the keyboard
+  // handler's number-key (2-9) branch can reference it without
+  // tripping over the temporal dead zone.
+  const sortedPeople = useMemo(
+    () => [...people].sort((a, b) => b.txnCount - a.txnCount),
+    [people],
+  );
+
   const toggleFriend = useCallback(
     (displayName: string) => {
       setSharedWith((prev) => {
@@ -548,20 +558,9 @@ export function SplitTxnModal({
           setActivePicker((cur) => (cur === "merchant" ? null : "merchant"));
           return;
         }
-        if (e.key === "f" || e.key === "F") {
-          e.preventDefault();
-          // Entering friend picker bumps the way to at least 2 so
-          // the chip grid renders. Also ensures the SplitPane is
-          // open since the chips now live inside it.
-          setShareCount((cur) => Math.max(cur, 2));
-          setActivePicker((cur) => (cur === "friend" ? null : "friend"));
-          setRightPane((cur) => (cur === "split" ? cur : "split"));
-          return;
-        }
         // 2-9 set the way (number of total people in the split).
-        // Picker stays open — useful flow: press F to open friend
-        // picker, press 3 to set 3-way, then ↑/↓/Enter to pick the
-        // 2 friend slots.
+        // Picker stays open so the user can then ↑/↓/Enter through
+        // chips to fill the remaining named slots.
         if (/^[2-9]$/.test(e.key)) {
           e.preventDefault();
           setShareCount(parseInt(e.key, 10));
@@ -632,23 +631,20 @@ export function SplitTxnModal({
       } else if (e.key === "m" || e.key === "M") {
         e.preventDefault();
         setActivePicker("merchant");
-      } else if (e.key === "f" || e.key === "F") {
-        // F enters split mode (with a default 2-way), opens the
-        // SplitPane (where the participant chips now live), and
-        // sets the keyboard highlight to "friend" so ↑/↓/Enter
-        // work on the chips immediately. One keystroke = "activate
-        // splitting + put me in friend-pick mode".
-        e.preventDefault();
-        setShareCount((cur) => Math.max(cur, 2));
-        setRightPane("split");
-        setActivePicker("friend");
       } else if (/^[2-9]$/.test(e.key)) {
-        // Number keys set the N-way split count. We don't auto-open
-        // the friend picker here so the user can press "3" to bump
-        // count then "F" if they want to pick friends, or "Enter" to
-        // save a 3-way with no named friends.
+        // Number keys set the N-way split count + open the SplitPane
+        // so the user can immediately name the participants for the
+        // new way count. Seeds the top friend if the txn is still
+        // personal so the user has something to work with.
         e.preventDefault();
-        setShareCount(parseInt(e.key, 10));
+        const n = parseInt(e.key, 10);
+        if (!split) {
+          const target =
+            row.suggestedSplitWith ?? sortedPeople[0]?.displayName;
+          if (target) setSharedWith([target]);
+        }
+        setShareCount(n);
+        setRightPane("split");
       } else if (e.key === "s" || e.key === "S") {
         e.preventDefault();
         applySuggested();
@@ -676,12 +672,10 @@ export function SplitTxnModal({
     pickerOpen,
     pickerIndex,
     activeList,
+    split,
+    row.suggestedSplitWith,
+    sortedPeople,
   ]);
-
-  const sortedPeople = useMemo(
-    () => [...people].sort((a, b) => b.txnCount - a.txnCount),
-    [people],
-  );
 
   return (
     <AnimatePresence>
@@ -1183,14 +1177,7 @@ export function SplitTxnModal({
                           className="tiny"
                           style={{ color: "var(--muted-2)" }}
                         >
-                          Press{" "}
-                          <span
-                            className="kbd"
-                            style={{ marginRight: 2 }}
-                          >
-                            F
-                          </span>{" "}
-                          or click here to split with friends
+                          Click here to split with friends
                         </span>
                       )}
                     </div>
@@ -1282,14 +1269,7 @@ export function SplitTxnModal({
                         className="tiny"
                         style={{ color: "var(--muted-2)" }}
                       >
-                        Click here or press{" "}
-                        <span
-                          className="kbd"
-                          style={{ marginRight: 2 }}
-                        >
-                          F
-                        </span>{" "}
-                        to add friends
+                        Click here to add friends
                       </span>
                     </div>
                   </>
@@ -1504,14 +1484,14 @@ export function SplitTxnModal({
                     <span className="kbd">↑</span>/<span className="kbd">↓</span> nav ·{" "}
                     <span className="kbd">↵</span> toggle ·{" "}
                     <span className="kbd">2</span>–<span className="kbd">9</span> way ·{" "}
-                    <span className="kbd">C</span>/<span className="kbd">M</span>/<span className="kbd">F</span> swap ·{" "}
+                    <span className="kbd">C</span>/<span className="kbd">M</span> swap ·{" "}
                     <span className="kbd">Esc</span> close
                   </>
                 ) : (
                   <>
                     <span className="kbd">↑</span>/<span className="kbd">↓</span> highlight ·{" "}
                     <span className="kbd">↵</span> jump ·{" "}
-                    <span className="kbd">C</span>/<span className="kbd">M</span>/<span className="kbd">F</span> swap ·{" "}
+                    <span className="kbd">C</span>/<span className="kbd">M</span> swap ·{" "}
                     <span className="kbd">Esc</span> close picker
                   </>
                 )
@@ -1520,7 +1500,6 @@ export function SplitTxnModal({
                   <span className="kbd">↵</span> save ·{" "}
                   <span className="kbd">S</span> suggest ·{" "}
                   <span className="kbd">J</span> just me ·{" "}
-                  <span className="kbd">F</span> friends ·{" "}
                   <span className="kbd">2</span>–<span className="kbd">9</span> way ·{" "}
                   <span className="kbd">Space</span> detail ·{" "}
                   <span className="kbd">\</span> split ·{" "}
