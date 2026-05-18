@@ -1067,186 +1067,234 @@ export function SplitTxnModal({
                   </button>
                 )}
               </div>
-              <div
-                className="flex"
+              {/* Status card — read-only display of the current
+                  split state. The form body is now informational
+                  only; all editing happens in the SplitPane (open
+                  with F, click, or `\`). Three render modes:
+                    1. Personal expense (sharedWith=[]): static
+                       label "just you" + CTA hint "press F to
+                       split" when un-reviewed; the CTA fades on
+                       reviewed-as-personal since that's settled.
+                    2. Split with names: chip row of participants,
+                       credit-tinted (settled) or accent (editing).
+                    3. Broken split (shareCount > 1, no names):
+                       warn-tinted "needs names" CTA.
+                  Clicking the card opens the SplitPane. For state
+                  (1), the click also seeds a default friend so the
+                  pane lands on a usable starting config. */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (!split) {
+                    // First time entering split — seed sharedWith
+                    // with the suggested or top-frequency contact
+                    // so the SplitPane has at least one
+                    // participant.
+                    const target =
+                      row.suggestedSplitWith ??
+                      sortedPeople[0]?.displayName;
+                    if (target) {
+                      setSharedWith([target]);
+                      setShareCount(2);
+                    }
+                  }
+                  setRightPane("split");
+                }}
+                title={
+                  split
+                    ? "Edit split — opens the customize-split pane"
+                    : "Split with friends — press F or click"
+                }
                 style={{
-                  background: "var(--surface-2)",
-                  border: "1px solid var(--border)",
-                  borderRadius: 8,
-                  padding: 3,
-                  gap: 2,
+                  width: "100%",
+                  padding: "12px 14px",
                   marginBottom: 10,
+                  background: !split
+                    ? row.reviewed
+                      ? "var(--surface-2)"
+                      : "var(--surface)"
+                    : sharedWith.length === 0
+                      ? "color-mix(in srgb, var(--warn) 8%, transparent)"
+                      : row.reviewed || row.shareCount > 1
+                        ? "color-mix(in srgb, var(--credit) 6%, transparent)"
+                        : "var(--accent-soft)",
+                  border: `1px ${
+                    !split && !row.reviewed ? "dashed" : "solid"
+                  } ${
+                    !split
+                      ? "var(--border)"
+                      : sharedWith.length === 0
+                        ? "color-mix(in srgb, var(--warn) 45%, var(--border))"
+                        : row.reviewed || row.shareCount > 1
+                          ? "color-mix(in srgb, var(--credit) 35%, transparent)"
+                          : "var(--accent-line)"
+                  }`,
+                  borderRadius: 10,
+                  color: "var(--fg)",
+                  fontFamily: "inherit",
+                  textAlign: "left",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  flexWrap: "wrap",
+                  transition:
+                    "background 140ms var(--ease-out), border-color 140ms var(--ease-out)",
                 }}
               >
-                <button
-                  type="button"
-                  onClick={setJustMe}
-                  style={{
-                    flex: 1,
-                    padding: "7px 10px",
-                    background: !split ? "var(--surface)" : "transparent",
-                    border: !split
-                      ? "1px solid var(--border-strong)"
-                      : "1px solid transparent",
-                    borderRadius: 6,
-                    color: !split ? "var(--fg)" : "var(--muted)",
-                    fontSize: 13,
-                    fontFamily: "inherit",
-                    cursor: "pointer",
-                  }}
-                >
-                  Just me <span className="kbd" style={{ marginLeft: 6 }}>J</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    // First time entering split mode: seed with the
-                    // suggested friend (or the most-frequent contact
-                    // if no suggestion) so the pane opens with at
-                    // least one participant to work with.
-                    if (!split) {
-                      const target =
-                        row.suggestedSplitWith ??
-                        sortedPeople[0]?.displayName;
-                      if (target) {
-                        setSharedWith([target]);
-                        setShareCount(2);
-                      }
-                    }
-                    // Always open the SplitPane — all participant
-                    // management lives there now (chips below the
-                    // toggle were retired in favor of the pane). The
-                    // toggle is a "switch on splitting + show me the
-                    // configurator" affordance, not a chip-reveal.
-                    setRightPane("split");
-                  }}
-                  style={{
-                    flex: 1,
-                    padding: "7px 10px",
-                    background: split ? "var(--surface)" : "transparent",
-                    border: split
-                      ? "1px solid var(--border-strong)"
-                      : "1px solid transparent",
-                    borderRadius: 6,
-                    color: split ? "var(--fg)" : "var(--muted)",
-                    fontSize: 13,
-                    fontFamily: "inherit",
-                    cursor: "pointer",
-                  }}
-                >
-                  Split with friends
-                </button>
-              </div>
-              {/* Chip grid + friend-picker banner are NOT rendered here
-                  anymore. All participant management — adding friends,
-                  removing, keyboard-picking, the live N-way · M named
-                  status — moved into the SplitPane (the slide-out
-                  drawer to the right). The "Split with friends" toggle
-                  above + the X-way badge open that pane; the F shortcut
-                  jumps straight into friend-pick mode within it. */}
-              {/* Participant strip — read-only display of who this
-                  txn is split with. Three states:
-                    - sharedWith has names (good): pill row of names.
-                      Credit-tinted when settled, neutral accent
-                      while editing. Click to open SplitPane.
-                    - shareCount > 1 but sharedWith=[] (legacy /
-                      broken): warn-tinted pill saying "N-way · no
-                      participants named". Click jumps to SplitPane
-                      so the user can fix it.
-                    - else (Just me): nothing rendered.
-                  Click any pill opens the SplitPane to edit. */}
-              {split && (
-                <div
-                  style={{
-                    marginTop: 10,
-                    display: "flex",
-                    flexWrap: "wrap",
-                    alignItems: "center",
-                    gap: 6,
-                  }}
-                >
-                  {sharedWith.length > 0 ? (
-                    <>
-                      <span
-                        className="tiny"
-                        style={{
-                          color: "var(--muted-2)",
-                          marginRight: 2,
-                        }}
-                      >
-                        With:
-                      </span>
-                      {sharedWith.map((name) => {
-                        const settled =
-                          row.reviewed || row.shareCount > 1;
-                        return (
-                          <button
-                            key={name}
-                            type="button"
-                            onClick={() =>
-                              setRightPane((cur) =>
-                                cur === "split" ? null : "split",
-                              )
-                            }
-                            title="Edit split"
-                            className="chip"
-                            style={{
-                              padding: "2px 8px",
-                              fontSize: 11.5,
-                              background: settled
-                                ? "color-mix(in srgb, var(--credit) 10%, transparent)"
-                                : "var(--accent-soft)",
-                              borderColor: settled
-                                ? "color-mix(in srgb, var(--credit) 35%, transparent)"
-                                : "var(--accent-line)",
-                              color: settled
-                                ? "var(--credit)"
-                                : "var(--accent)",
-                              cursor: "pointer",
-                              fontFamily: "inherit",
-                            }}
-                          >
-                            {settled && <Ico name="check" size={10} />}
-                            {name}
-                          </button>
-                        );
-                      })}
-                    </>
-                  ) : (
-                    /* Missing-names state. The DB has a shareCount
-                       > 1 but no participants — most likely from
-                       a save before the modal hydrated names
-                       correctly, or from imported data without
-                       participant lists. Warn-colored CTA that
-                       opens the SplitPane so the user can name
-                       the participants. */
-                    <button
-                      type="button"
-                      onClick={() => setRightPane("split")}
+                {!split ? (
+                  // ── Personal expense ─────────────────────────────
+                  <>
+                    <span
+                      aria-hidden
                       style={{
                         display: "inline-flex",
-                        alignItems: "center",
-                        gap: 6,
-                        padding: "4px 10px",
-                        fontSize: 11.5,
-                        background:
-                          "color-mix(in srgb, var(--warn) 10%, transparent)",
-                        border:
-                          "1px dashed color-mix(in srgb, var(--warn) 45%, var(--border))",
-                        color: "var(--warn)",
-                        borderRadius: 7,
-                        fontFamily: "inherit",
-                        cursor: "pointer",
+                        color: row.reviewed
+                          ? "var(--credit)"
+                          : "var(--muted)",
                       }}
-                      title="Open split pane to name participants"
                     >
-                      <Ico name="users" size={11} />
-                      {shareCount}-way split · no participants named —
-                      click to add
-                    </button>
-                  )}
-                </div>
-              )}
+                      <Ico name="user" size={14} />
+                    </span>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 2,
+                        flex: 1,
+                        minWidth: 0,
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: 13.5,
+                          color: row.reviewed
+                            ? "var(--credit)"
+                            : "var(--fg)",
+                          fontWeight: 500,
+                        }}
+                      >
+                        {row.reviewed
+                          ? "Personal expense · settled"
+                          : "Personal expense · just you"}
+                      </span>
+                      {!row.reviewed && (
+                        <span
+                          className="tiny"
+                          style={{ color: "var(--muted-2)" }}
+                        >
+                          Press{" "}
+                          <span
+                            className="kbd"
+                            style={{ marginRight: 2 }}
+                          >
+                            F
+                          </span>{" "}
+                          or click here to split with friends
+                        </span>
+                      )}
+                    </div>
+                  </>
+                ) : sharedWith.length > 0 ? (
+                  // ── Split with named participants ─────────────────
+                  <>
+                    <span
+                      aria-hidden
+                      style={{
+                        display: "inline-flex",
+                        color:
+                          row.reviewed || row.shareCount > 1
+                            ? "var(--credit)"
+                            : "var(--accent)",
+                      }}
+                    >
+                      <Ico name="users" size={14} />
+                    </span>
+                    <span
+                      className="tiny"
+                      style={{
+                        color: "var(--muted-2)",
+                        marginRight: 2,
+                        flexShrink: 0,
+                      }}
+                    >
+                      Split with:
+                    </span>
+                    {sharedWith.map((name) => {
+                      const settled =
+                        row.reviewed || row.shareCount > 1;
+                      return (
+                        <span
+                          key={name}
+                          className="chip"
+                          style={{
+                            padding: "2px 8px",
+                            fontSize: 11.5,
+                            background: settled
+                              ? "color-mix(in srgb, var(--credit) 14%, transparent)"
+                              : "color-mix(in srgb, var(--accent) 14%, transparent)",
+                            borderColor: settled
+                              ? "color-mix(in srgb, var(--credit) 35%, transparent)"
+                              : "var(--accent-line)",
+                            color: settled
+                              ? "var(--credit)"
+                              : "var(--accent)",
+                            fontFamily: "inherit",
+                          }}
+                        >
+                          {settled && <Ico name="check" size={10} />}
+                          {name}
+                        </span>
+                      );
+                    })}
+                  </>
+                ) : (
+                  // ── Broken split: shareCount>1 but no names ──────
+                  <>
+                    <span
+                      aria-hidden
+                      style={{
+                        display: "inline-flex",
+                        color: "var(--warn)",
+                      }}
+                    >
+                      <Ico name="users" size={14} />
+                    </span>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 2,
+                        flex: 1,
+                        minWidth: 0,
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: 13.5,
+                          color: "var(--warn)",
+                          fontWeight: 500,
+                        }}
+                      >
+                        ⚠ {shareCount}-way split · no participants named
+                      </span>
+                      <span
+                        className="tiny"
+                        style={{ color: "var(--muted-2)" }}
+                      >
+                        Click here or press{" "}
+                        <span
+                          className="kbd"
+                          style={{ marginRight: 2 }}
+                        >
+                          F
+                        </span>{" "}
+                        to add friends
+                      </span>
+                    </div>
+                  </>
+                )}
+              </button>
 
               {split && row.direction === "debit" && (
                 <div
