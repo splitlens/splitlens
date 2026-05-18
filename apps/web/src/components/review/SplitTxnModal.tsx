@@ -740,15 +740,20 @@ export function SplitTxnModal({
             display: "flex",
             flexDirection: "column",
             boxShadow: "0 24px 80px rgba(0,0,0,0.55)",
-            // Credit-tinted top edge on settled txns (reviewed OR
-            // already split) — gives the user immediate at-a-glance
-            // signal of state when the modal opens. Mirrors the
-            // left-stripe treatment on queue rows so settled context
-            // reads consistently across surfaces.
+            // Top stripe — at-a-glance signal of the txn's state.
+            // Three modes:
+            //   credit (green): settled correctly (reviewed or
+            //     a fully-named split). Matches the queue row's
+            //     left-stripe.
+            //   warn (orange): "broken" state — split with a count
+            //     but no participants named. The user needs to fix.
+            //   none: fresh candidate.
             borderTop:
-              row.reviewed || row.shareCount > 1
-                ? "2px solid color-mix(in srgb, var(--credit) 55%, transparent)"
-                : undefined,
+              row.shareCount > 1 && (row.sharedWith ?? []).length === 0
+                ? "2px solid color-mix(in srgb, var(--warn) 55%, transparent)"
+                : row.reviewed || row.shareCount > 1
+                  ? "2px solid color-mix(in srgb, var(--credit) 55%, transparent)"
+                  : undefined,
             transition: "max-width 320ms cubic-bezier(0.16, 1, 0.3, 1)",
           }}
         >
@@ -774,36 +779,42 @@ export function SplitTxnModal({
               {" · "}
               {row.counterpartyKind ?? "txn"}
             </span>
-            {/* Saved-state badge — credit-tinted pill with a check.
-                Distinguishes already-settled txns from fresh
-                candidates the moment the modal opens. Two variants:
-                  - split: "✓ Split N-way" (the deliberate decision)
-                  - reviewed-only: "✓ Reviewed · just me" (defaulted
-                    to personal). Both signal "no action required". */}
-            {(row.shareCount > 1 || row.reviewed) && (
-              <span
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 4,
-                  padding: "2px 8px",
-                  borderRadius: 999,
-                  fontSize: 11,
-                  background:
-                    "color-mix(in srgb, var(--credit) 10%, transparent)",
-                  border:
-                    "1px solid color-mix(in srgb, var(--credit) 35%, transparent)",
-                  color: "var(--credit)",
-                  fontFamily: "var(--font-mono, ui-monospace, monospace)",
-                  letterSpacing: "0.01em",
-                }}
-              >
-                <Ico name="check" size={10} />
-                {row.shareCount > 1
-                  ? `Split ${row.shareCount}-way`
-                  : "Reviewed · just me"}
-              </span>
-            )}
+            {/* Saved-state badge — pill in the header that mirrors
+                the top stripe's color. Three variants:
+                  - "⚠ N-way · needs names" (warn) for the broken
+                    state where shareCount > 1 but sharedWith=[].
+                  - "✓ Split N-way" (credit) for fully-named splits.
+                  - "✓ Reviewed · just me" (credit) for personal
+                    txns already reviewed. */}
+            {(row.shareCount > 1 || row.reviewed) && (() => {
+              const missingNames =
+                row.shareCount > 1 && (row.sharedWith ?? []).length === 0;
+              const tone = missingNames ? "warn" : "credit";
+              return (
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    padding: "2px 8px",
+                    borderRadius: 999,
+                    fontSize: 11,
+                    background: `color-mix(in srgb, var(--${tone}) 10%, transparent)`,
+                    border: `1px solid color-mix(in srgb, var(--${tone}) 35%, transparent)`,
+                    color: `var(--${tone})`,
+                    fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                    letterSpacing: "0.01em",
+                  }}
+                >
+                  {!missingNames && <Ico name="check" size={10} />}
+                  {missingNames
+                    ? `⚠ ${row.shareCount}-way · needs names`
+                    : row.shareCount > 1
+                      ? `Split ${row.shareCount}-way`
+                      : "Reviewed · just me"}
+                </span>
+              );
+            })()}
             <span style={{ flex: 1 }} />
             <button type="button" className="btn btn-sm ghost" onClick={onPrev}>
               <Ico name="arrow-left" size={13} />
@@ -1134,13 +1145,17 @@ export function SplitTxnModal({
                   above + the X-way badge open that pane; the F shortcut
                   jumps straight into friend-pick mode within it. */}
               {/* Participant strip — read-only display of who this
-                  txn is split with, visible whenever the user named
-                  at least one friend. Lets the user see participants
-                  at-a-glance without opening the SplitPane. Pill is
-                  styled to match the credit/done tone when the txn
-                  is already settled, neutral otherwise. Click any
-                  pill to open the SplitPane and edit. */}
-              {split && sharedWith.length > 0 && (
+                  txn is split with. Three states:
+                    - sharedWith has names (good): pill row of names.
+                      Credit-tinted when settled, neutral accent
+                      while editing. Click to open SplitPane.
+                    - shareCount > 1 but sharedWith=[] (legacy /
+                      broken): warn-tinted pill saying "N-way · no
+                      participants named". Click jumps to SplitPane
+                      so the user can fix it.
+                    - else (Just me): nothing rendered.
+                  Click any pill opens the SplitPane to edit. */}
+              {split && (
                 <div
                   style={{
                     marginTop: 10,
@@ -1150,49 +1165,86 @@ export function SplitTxnModal({
                     gap: 6,
                   }}
                 >
-                  <span
-                    className="tiny"
-                    style={{
-                      color: "var(--muted-2)",
-                      marginRight: 2,
-                    }}
-                  >
-                    With:
-                  </span>
-                  {sharedWith.map((name) => {
-                    const settled = row.reviewed || row.shareCount > 1;
-                    return (
-                      <button
-                        key={name}
-                        type="button"
-                        onClick={() =>
-                          setRightPane((cur) =>
-                            cur === "split" ? null : "split",
-                          )
-                        }
-                        title="Edit split"
-                        className="chip"
+                  {sharedWith.length > 0 ? (
+                    <>
+                      <span
+                        className="tiny"
                         style={{
-                          padding: "2px 8px",
-                          fontSize: 11.5,
-                          background: settled
-                            ? "color-mix(in srgb, var(--credit) 10%, transparent)"
-                            : "var(--accent-soft)",
-                          borderColor: settled
-                            ? "color-mix(in srgb, var(--credit) 35%, transparent)"
-                            : "var(--accent-line)",
-                          color: settled
-                            ? "var(--credit)"
-                            : "var(--accent)",
-                          cursor: "pointer",
-                          fontFamily: "inherit",
+                          color: "var(--muted-2)",
+                          marginRight: 2,
                         }}
                       >
-                        {settled && <Ico name="check" size={10} />}
-                        {name}
-                      </button>
-                    );
-                  })}
+                        With:
+                      </span>
+                      {sharedWith.map((name) => {
+                        const settled =
+                          row.reviewed || row.shareCount > 1;
+                        return (
+                          <button
+                            key={name}
+                            type="button"
+                            onClick={() =>
+                              setRightPane((cur) =>
+                                cur === "split" ? null : "split",
+                              )
+                            }
+                            title="Edit split"
+                            className="chip"
+                            style={{
+                              padding: "2px 8px",
+                              fontSize: 11.5,
+                              background: settled
+                                ? "color-mix(in srgb, var(--credit) 10%, transparent)"
+                                : "var(--accent-soft)",
+                              borderColor: settled
+                                ? "color-mix(in srgb, var(--credit) 35%, transparent)"
+                                : "var(--accent-line)",
+                              color: settled
+                                ? "var(--credit)"
+                                : "var(--accent)",
+                              cursor: "pointer",
+                              fontFamily: "inherit",
+                            }}
+                          >
+                            {settled && <Ico name="check" size={10} />}
+                            {name}
+                          </button>
+                        );
+                      })}
+                    </>
+                  ) : (
+                    /* Missing-names state. The DB has a shareCount
+                       > 1 but no participants — most likely from
+                       a save before the modal hydrated names
+                       correctly, or from imported data without
+                       participant lists. Warn-colored CTA that
+                       opens the SplitPane so the user can name
+                       the participants. */
+                    <button
+                      type="button"
+                      onClick={() => setRightPane("split")}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                        padding: "4px 10px",
+                        fontSize: 11.5,
+                        background:
+                          "color-mix(in srgb, var(--warn) 10%, transparent)",
+                        border:
+                          "1px dashed color-mix(in srgb, var(--warn) 45%, var(--border))",
+                        color: "var(--warn)",
+                        borderRadius: 7,
+                        fontFamily: "inherit",
+                        cursor: "pointer",
+                      }}
+                      title="Open split pane to name participants"
+                    >
+                      <Ico name="users" size={11} />
+                      {shareCount}-way split · no participants named —
+                      click to add
+                    </button>
+                  )}
                 </div>
               )}
 
