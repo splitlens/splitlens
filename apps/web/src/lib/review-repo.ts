@@ -733,9 +733,22 @@ export async function getTransactionForReview(
     personId: t.person_id,
     category: t.category,
     categoryRule: t.category_rule,
-    sharedWith: t.shared_with
-      ? t.shared_with.split(",").map((s) => s.trim()).filter(Boolean)
-      : [],
+    sharedWith: (() => {
+      // Same parser strategy as getAllClientReviewRows — JSON first
+      // (current writers), CSV fallback (legacy rows). Centralizing
+      // these would be cleaner; that's a separate cleanup.
+      if (!t.shared_with) return [];
+      try {
+        const parsed = JSON.parse(t.shared_with);
+        if (Array.isArray(parsed)) return parsed.map(String);
+      } catch {
+        // fall through to CSV
+      }
+      return t.shared_with
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    })(),
     shareCount: t.share_count ?? 1,
     recurrence: t.recurrence,
     notes: t.notes,
@@ -2064,16 +2077,22 @@ export async function getAllClientReviewRows(): Promise<ClientReviewRow[]> {
   `);
   return rows.map((r) => {
     // shared_with on the txns table is stored as a JSON-encoded text
-    // array (matches the InboxModal save shape). Decode defensively;
-    // pre-rules rows may have CSV or a stray scalar — treat anything
-    // we can't parse as no-split.
+    // array by the current writers (updateTransaction +
+    // applyMerchantRule). Older saves wrote CSV (`"Rahul, Shivam"`),
+    // so we try JSON first and fall back to CSV split — that way
+    // legacy rows still surface their participant names instead of
+    // silently rendering as "N-way · no names".
     let sharedWith: string[] = [];
     if (r.shared_with) {
       try {
         const parsed = JSON.parse(r.shared_with);
         if (Array.isArray(parsed)) sharedWith = parsed.map(String);
       } catch {
-        // fall through; empty list
+        // CSV fallback for legacy rows.
+        sharedWith = r.shared_with
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0);
       }
     }
     return {

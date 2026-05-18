@@ -254,8 +254,10 @@ export async function updateTransaction(
   }
   if ("sharedWith" in edits) {
     // Clearing → NULL in shared_with, 1 in share_count (back to "just me").
-    // The on-disk shape is a comma-separated string (matches what the
-    // detail repo reads), not JSON.
+    // On-disk shape is a JSON-encoded array to match the bulk
+    // `applyMerchantRule` writer and the queue (`getAllClientReviewRows`)
+    // reader. The detail repo's reader is JSON-with-CSV-fallback for
+    // backward compat with older rows that were written as CSV.
     if (edits.sharedWith == null || edits.sharedWith.length === 0) {
       fragments.push(sql`shared_with = NULL`);
       if (!("shareCount" in edits)) fragments.push(sql`share_count = 1`);
@@ -263,7 +265,7 @@ export async function updateTransaction(
       const cleaned = edits.sharedWith
         .map((s) => s.trim())
         .filter((s) => s.length > 0);
-      fragments.push(sql`shared_with = ${cleaned.join(", ")}`);
+      fragments.push(sql`shared_with = ${JSON.stringify(cleaned)}`);
       if (!("shareCount" in edits)) {
         fragments.push(sql`share_count = ${cleaned.length + 1}`);
       }
